@@ -581,10 +581,13 @@ class Investigation:
             first = self.coverage
             again = {"findings": [], "trail": [], "report": first.get("report", {})}
             if hits:
+                # The pages behind McLovin's signals go first: when one is a news story, it is prior coverage
+                # by definition, and a fresh news search often doesn't surface it.
+                seen = {lead["url"] for lead in self.leads}
                 try:
                     again = scout_agent.run({**task, "tools": ["read", "news_search"]},
                                             budget=max(MIN_BUDGET, self.budget // 2), context=self._context(),
-                                            leads=hits, say=self.say)
+                                            leads=self.leads + [h for h in hits if h["url"] not in seen], say=self.say)
                 except web.SearchError:
                     raise
                 except Exception as e:  # noqa: BLE001 - the searches ran; the scout's reading just failed

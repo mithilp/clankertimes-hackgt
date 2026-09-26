@@ -588,13 +588,14 @@ def test_a_story_whose_coverage_could_not_be_checked_is_not_written(env, monkeyp
 
 def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(env, monkeypatch):
     monkeypatch.setattr(llm, "ask_json", FakeModel())
-    tasks = []
+    tasks, leads_seen = [], []
     fake_scouts(monkeypatch)
     real = reporter_agent.scout_agent.run
 
     def run_scout(task, **kw):
         if task.get("mode") == "coverage":
             tasks.append(task)
+            leads_seen.append(kw.get("leads", []))
             if len(tasks) == 1:          # first time out: every search unavailable
                 return {"findings": [], "report": {"coverage": []},
                         "trail": [{"tool": "web_search", "arg": "x", "why": "", "result": f"{scout_agent.UNAVAILABLE}: paused"}]}
@@ -608,3 +609,5 @@ def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(
     run(write=False)
     # The reporter ran the news search itself (not trusting the scout to), then sent the scout to read.
     assert searched and len(tasks) == 2 and tasks[1]["tools"] == ["read", "news_search"]
+    # It reads the pages behind McLovin's signals too: the story that started it is prior coverage.
+    assert [lead["url"] for lead in leads_seen[1]][-1] == "https://news.example/1" and len(leads_seen[1]) >= 1
