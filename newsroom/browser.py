@@ -82,7 +82,11 @@ class _Browser:
         )
         try:
             page = context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            except Exception as e:  # noqa: BLE001 - playwright raises its own Error type
+                # A PDF or other file starts a download instead of a page; the plain-HTTP reader handles those.
+                raise BrowserError(f"could not open {url} in the browser: {str(e)[:120]}") from e
             if wait_for:
                 page.wait_for_selector(wait_for, timeout=15_000)
             # A page that is mid-redirect refuses content(); settle, then retry once or twice.

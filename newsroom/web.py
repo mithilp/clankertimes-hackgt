@@ -53,8 +53,9 @@ def fetch_text(url: str) -> str:
         row = conn.execute("select text from pages where url = ?", (url,)).fetchone()
     if row:
         return row["text"]
-    if config.load().search_backend == "browser":
+    if config.load().search_backend == "browser" and not urlparse(url).path.lower().endswith(".pdf"):
         # The browser renders JS and gets past plain-HTTP blocks; fall through to httpx if it fails.
+        # PDFs go straight to httpx: in a browser they start a download instead of opening.
         from . import browser
         try:
             text = browser.fetch_text(url)
