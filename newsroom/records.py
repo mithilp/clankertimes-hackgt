@@ -149,5 +149,32 @@ def lawsuits(company: str, problem: str) -> list[dict]:
     return records
 
 
+def sec_filings(phrase: str, forms: str = "", since: str = "") -> list[dict]:
+    """EDGAR full-text search (filings since 2001): the filings whose text contains the phrase, newest first.
+    forms: comma-separated form types (8-K, 10-K, 4, S-1, DEF 14A, 13D ...). since: YYYY-MM-DD, default a
+    year back. Returns [{url, title, date, form, filer}] pointing at the filing document itself."""
+    from datetime import date, timedelta
+    from .web import SEC_HEADERS
+    phrase = phrase.strip()
+    q = phrase if '"' in phrase or len(phrase.split()) == 1 else f'"{phrase}"'
+    params = {"q": q, "dateRange": "custom", "startdt": since or (date.today() - timedelta(days=365)).isoformat(),
+              "enddt": date.today().isoformat()}
+    if forms:
+        params["forms"] = ",".join(f.strip().upper() for f in forms.split(",") if f.strip())
+    response = httpx.get("https://efts.sec.gov/LATEST/search-index", params=params, headers=SEC_HEADERS, timeout=30)
+    response.raise_for_status()
+    rows = []
+    for hit in response.json().get("hits", {}).get("hits", []):
+        src, (adsh, _, filename) = hit.get("_source", {}), hit.get("_id", "").partition(":")
+        if not (src.get("ciks") and adsh and filename):
+            continue
+        cik = src["ciks"][0].lstrip("0")
+        rows.append({"url": f"https://www.sec.gov/Archives/edgar/data/{cik}/{adsh.replace('-', '')}/{filename}",
+                     "title": f"{src.get('form', '')} {', '.join(src.get('display_names', []))[:120]}",
+                     "date": src.get("file_date", ""), "form": src.get("form", ""),
+                     "filer": ", ".join(src.get("display_names", []))})
+    return sorted(rows, key=lambda r: r["date"], reverse=True)
+
+
 def _text(*parts: str | None) -> str:
     return re.sub(r"\s+", " ", " ".join(p for p in parts if p)).strip()[:TEXT_LIMIT]

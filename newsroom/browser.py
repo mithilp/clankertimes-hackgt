@@ -71,9 +71,13 @@ class _Browser:
         return self._browser
 
     def html(self, url: str, wait_for: str | None = None) -> str:
-        return self._thread.submit(self._html, url, wait_for).result()
+        return self._thread.submit(self._html, url, wait_for).result()[1]
 
-    def _html(self, url: str, wait_for: str | None) -> str:
+    def page(self, url: str) -> tuple[str, str]:
+        """(the URL the page ended up at, its HTML)."""
+        return self._thread.submit(self._html, url, None).result()
+
+    def _html(self, url: str, wait_for: str | None) -> tuple[str, str]:
         browser = self._ensure()
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -99,7 +103,7 @@ class _Browser:
             last = None
             for _ in range(3):
                 try:
-                    return page.content()
+                    return page.url, page.content()
                 except Exception as e:  # noqa: BLE001 - playwright raises a generic Error here
                     last = e
                     page.wait_for_timeout(1_500)
@@ -240,6 +244,13 @@ def fetch_text(url: str) -> str:
     html = _browser.html(url)
     _check_blocked(html)
     return _html_text(html)[:MAX_TEXT]
+
+
+def fetch_page(url: str) -> tuple[str, str]:
+    """(final URL, HTML) of a page rendered by the browser. Raises on a bot wall."""
+    final, html = _browser.page(url)
+    _check_blocked(html)
+    return final, html
 
 
 def _real_url(href: str) -> str:

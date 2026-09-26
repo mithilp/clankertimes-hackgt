@@ -8,7 +8,9 @@ own terms, what would support it and what would contradict it) and a scout does 
             the newsroom's DB:   db_signals (Bossman's signals in Astra), db_desk (quotes past investigations verified)
             official records:    nhtsa_recalls, nhtsa_investigations, fda_recalls, cpsc_recalls, court_dockets,
                                  federal_register
-            the web:             news_search (Google News), web_search (DuckDuckGo, then Bing), read
+            SEC:                 sec_filings (EDGAR full-text search)
+            the web:             open (browse a site by its links), news_search (Google News),
+                                 web_search (DuckDuckGo, then Bing, then the Brave API), read
         run them in parallel; `read` pulls exact quotes, each checked word for word against the page
     report back: verdict, what was searched (so "nothing found" is scoped to a search), dead ends,
                  new hypotheses worth the reporter's budget, and what to check next
@@ -44,10 +46,17 @@ TOOLS = {
     "court_dockets": ("company | problem words", "federal court dockets (CourtListener) naming the company and the problem"),
     "federal_register": ("exact phrase", "Federal Register rules, proposed rules, notices and orders containing the phrase"),
     "news_search": ("query", "Google News, newest first; add when:365d to reach back a year. Best for what outlets reported"),
-    "web_search": ("query", "general web search in a real browser; short queries work best, site:agency.gov helps"),
+    "sec_filings": ("exact phrase | forms | since", "SEC EDGAR full-text search, newest first, e.g. \"going concern\" | 8-K | "
+                    "2026-01-01. Forms: 8-K, 10-K, 10-Q, 4 (insider trades), S-1, DEF 14A, SC 13D. Blank forms = all"),
+    "open": ("URL or result ref", "open a page the way a person browsing would: its title, opening text and its links, each "
+             "a new ref. Navigate an agency's report index, a filing list or a docket, or a record site's own search page "
+             "(build its URL yourself), without a search engine. Then read the page you need"),
+    "web_search": ("query", "general web search: short queries work best, site:agency.gov helps. Scarce and partly paid: "
+                   "when you know which site holds the record, open it instead"),
     "read": ("URL or result ref like R4", "read one page or record and pull the exact quotes that bear on your statement"),
 }
-COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "read")
+COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "open", "read")
+MAX_LINKS_SHOWN = 20
 
 STEP = """
 # Your job right now: take the next step
@@ -59,7 +68,9 @@ Work the way the playbook above says: official records first, then the agency's 
 social posts only for leads. Follow the reporter's direction. Search for what would CONTRADICT the statement
 as hard as for what would support it. Use the records' own words: agencies rarely use the words posts use.
 Never repeat a call you already made. Read the most promising results rather than searching forever: a
-search result is not evidence until you read the page.
+search result is not evidence until you read the page. When you know which site holds the record (the
+auditor's reports page, the agency's enforcement list, the city's agenda portal), open that site and follow
+its links instead of searching the web for it.
 
 Tools:
 {tools}
@@ -164,6 +175,13 @@ class Scout:
         """Run one call. Returns a short text result for the trail."""
         if tool == "read":
             return self._read(arg)
+        if tool == "open":
+            return self._open(arg)
+        if tool == "sec_filings":
+            phrase, forms, since = _pipe(arg, 3)
+            refs = [self._hit(r["url"], f"[SEC {r['form']} filed {r['date']}] {r['filer'][:100]}", "")
+                    for r in records.sec_filings(phrase, forms, since)[:12]]
+            return self._listing([r for r in refs if r], "SEC filings")
         if tool == "db_signals":
             from .signals import get_store
             refs = []
@@ -230,10 +248,38 @@ class Scout:
         more = f" (+{len(refs) - MAX_RESULTS_SHOWN} more)" if len(refs) > MAX_RESULTS_SHOWN else ""
         return f"{len(refs)} {what}{more}:\n      " + "\n      ".join(shown)
 
-    def _read(self, arg: str) -> str:
+    def _resolve(self, arg: str) -> tuple[str, dict | None]:
         ref = arg.strip().strip("[]")
         hit = self.hits.get(ref) or (self.hits.get(self.by_url[arg.strip()]) if arg.strip() in self.by_url else None)
-        url = hit["url"] if hit else arg.strip()
+        return (hit["url"] if hit else arg.strip()), hit
+
+    def _open(self, arg: str) -> str:
+        url, _ = self._resolve(arg)
+        if not url.startswith("http"):
+            return f"can't open {arg!r}: give a URL or a result ref"
+        page = web.open_page(url)
+        if page.get("blocked"):
+            return "behind a bot check; not bypassing it. Try another site or source"
+        if not page["text"]:
+            return "couldn't open it (gone, blocked or not a page); try another source"
+        words = {w for w in re.findall(r"[a-z0-9]{4,}", f"{self.statement} {self._assignment()}".lower())}
+        here = web.host(page["url"])
+
+        def score(link: dict) -> float:
+            text = f"{link['text']} {link['url']}".lower()
+            return (sum(w in text for w in words) + (2 if link["url"].lower().endswith(".pdf") else 0)
+                    + (1 if web.host(link["url"]) == here else 0))
+        links = sorted(page["links"], key=score, reverse=True)[:MAX_LINKS_SHOWN]
+        refs = [self._hit(link["url"], f"[link on {here}] {link['text']}") for link in links]
+        shown = [f"{r} {self.hits[r]['title'][len(f'[link on {here}] '):][:90]} ({web.host(self.hits[r]['url'])}"
+                 f"{web.urlparse(self.hits[r]['url']).path[:60]})" for r in refs if r]
+        preview = " ".join(page["text"][:400].split())
+        return (f"opened {page['title'] or page['url']}: {preview}\n      "
+                + (f"{len(page['links'])} links, the {len(shown)} most relevant:\n      " + "\n      ".join(shown)
+                   if shown else "no links (a document: read it)"))
+
+    def _read(self, arg: str) -> str:
+        url, hit = self._resolve(arg)
         if not url.startswith("http"):
             return f"can't read {arg!r}: give a URL or a result ref"
         if url in self.read_urls:

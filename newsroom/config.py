@@ -15,6 +15,7 @@ class Settings:
     claude_bin: str
     claude_concurrency: int  # concurrent `claude -p` processes
     search_backend: str      # "browser" (default): no API key, DuckDuckGo first; or "brave": the Brave API
+    search_fallback: str     # "brave" (default): when every browser engine is paused, use the Brave API; or "none"
     browser_channel: str | None  # e.g. "chrome" to drive the installed Chrome instead of bundled Chromium
     deepseek_api_key: str | None
     deepseek_base_url: str
@@ -47,6 +48,7 @@ def load() -> Settings:
         claude_bin=env("CLAUDE_BIN", "claude"),
         claude_concurrency=int(env("NEWSROOM_CLAUDE_CONCURRENCY", "2")),
         search_backend=env("NEWSROOM_SEARCH_BACKEND", "browser").lower(),
+        search_fallback=env("NEWSROOM_SEARCH_FALLBACK", "brave").lower(),
         browser_channel=env("NEWSROOM_BROWSER_CHANNEL") or None,
         deepseek_api_key=env("DEEPSEEK_API_KEY") or None,
         deepseek_base_url=env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),

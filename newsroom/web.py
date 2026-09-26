@@ -1,7 +1,8 @@
 """Web search and page fetching for scouts. Fetched pages are cached, so quotes can be re-checked later.
 
-Search defaults to newsroom/browser.py: no API key, DuckDuckGo first. NEWSROOM_SEARCH_BACKEND=brave uses the
-Brave Search API instead (needs BRAVE_API_KEY)."""
+Search defaults to newsroom/browser.py: no API key, DuckDuckGo first. When every engine there is paused or
+blocked, the Brave Search API takes the query (metered, so it is the fallback; NEWSROOM_SEARCH_FALLBACK=none
+turns that off). NEWSROOM_SEARCH_BACKEND=brave uses Brave for everything."""
 
 import io
 import re
@@ -15,6 +16,18 @@ from . import config, db
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 MAX_TEXT = 200_000
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; newsroom-research/0.1)"}
+# SEC's fair-access policy: automated requests must declare who they are, or EDGAR answers 403. Its pages
+# are plain HTML, so they skip the browser.
+SEC_HEADERS = {"User-Agent": "Clanker Times newsroom research https://clankertimes.vercel.app/about"}
+
+
+def _plain_http(url: str) -> bool:
+    """Pages the browser can't or needn't open: PDFs start a download, and SEC wants a declared agent."""
+    return urlparse(url).path.lower().endswith(".pdf") or host(url).endswith("sec.gov")
+
+
+def _headers(url: str) -> dict:
+    return SEC_HEADERS if host(url).endswith("sec.gov") else HEADERS
 
 
 class SearchError(RuntimeError):
@@ -26,19 +39,32 @@ class SearchUnavailable(SearchError):
 
 
 def search(query: str, count: int = 10) -> list[dict]:
-    """No API key by default (newsroom/browser.py). Brave only when NEWSROOM_SEARCH_BACKEND=brave: it is
-    never a silent fallback."""
-    if config.load().search_backend != "brave":
-        from . import browser
-        try:
-            return browser.search(query, count)
-        except browser.BrowserError as e:
+    """The free browser engines first (newsroom/browser.py); the metered Brave API only when they are all
+    paused or blocked, or when NEWSROOM_SEARCH_BACKEND=brave."""
+    settings = config.load()
+    if settings.search_backend == "brave":
+        return _brave(query, count)
+    from . import browser
+    try:
+        return browser.search(query, count)
+    except browser.BrowserError as e:
+        if settings.search_fallback != "brave" or not settings.brave_api_key:
             raise SearchUnavailable(str(e)) from e
+        try:
+            return _brave(query, count)
+        except httpx.HTTPError as b:
+            raise SearchUnavailable(f"{e}; brave: {type(b).__name__}: {b}"[:300]) from b
+
+
+def _brave(query: str, count: int) -> list[dict]:
+    from . import throttle
     key = config.load().brave_api_key
     if not key:
         raise SearchError("NEWSROOM_SEARCH_BACKEND=brave but BRAVE_API_KEY is not set in .env")
-    response = httpx.get(BRAVE_URL, params={"q": query, "count": count},
-                         headers={"X-Subscription-Token": key, "Accept": "application/json"}, timeout=30)
+    with throttle.pace("brave", 0.2):
+        response = httpx.get(BRAVE_URL, params={"q": query, "count": count},
+                             headers={"X-Subscription-Token": key, "Accept": "application/json"}, timeout=30)
+    throttle.tally("brave")
     response.raise_for_status()
     return [
         {"title": _strip_tags(r.get("title", "")), "url": r["url"], "description": _strip_tags(r.get("description", "")),
@@ -53,9 +79,8 @@ def fetch_text(url: str) -> str:
         row = conn.execute("select text from pages where url = ?", (url,)).fetchone()
     if row and not (urlparse(url).hostname == "news.google.com" and len(row["text"]) < 500):
         return row["text"]      # (a tiny cached Google News page is its redirect stub, not the article)
-    if config.load().search_backend == "browser" and not urlparse(url).path.lower().endswith(".pdf"):
+    if config.load().search_backend == "browser" and not _plain_http(url):
         # The browser renders JS and gets past plain-HTTP blocks; fall through to httpx if it fails.
-        # PDFs go straight to httpx: in a browser they start a download instead of opening.
         from . import browser
         try:
             text = browser.fetch_text(url)
@@ -67,7 +92,7 @@ def fetch_text(url: str) -> str:
         except browser.BrowserError:
             pass
     try:
-        response = httpx.get(url, headers=HEADERS, timeout=30, follow_redirects=True)
+        response = httpx.get(url, headers=_headers(url), timeout=30, follow_redirects=True)
         response.raise_for_status()
     except httpx.HTTPError:
         return ""
@@ -79,6 +104,48 @@ def fetch_text(url: str) -> str:
         with db.session() as conn:
             conn.execute("insert or replace into pages (url, fetched, text) values (?, ?, ?)", (url, db.now(), text))
     return text
+
+
+def open_page(url: str) -> dict:
+    """A page as a person browsing sees it: {url, title, text, links: [{url, text}]}. For navigating a site
+    (an agency's report index, a docket, a filing list) without a search engine. PDFs come back as text with
+    no links. The text is cached, so reading the page afterwards doesn't fetch it again."""
+    from urllib.parse import urljoin
+    html, final = "", url
+    if config.load().search_backend == "browser" and not _plain_http(url):
+        from . import browser
+        try:
+            final, html = browser.fetch_page(url)
+        except browser.Blocked:
+            return {"url": url, "title": "", "text": "", "links": [], "blocked": True}
+        except browser.BrowserError:
+            html = ""
+    if not html:
+        try:
+            response = httpx.get(url, headers=_headers(url), timeout=30, follow_redirects=True)
+            response.raise_for_status()
+        except httpx.HTTPError:
+            return {"url": url, "title": "", "text": "", "links": []}
+        final = str(response.url)
+        if "pdf" in response.headers.get("content-type", "") or url.lower().endswith(".pdf"):
+            text = _pdf_text(response.content)[:MAX_TEXT]
+            if text:
+                remember(url, text)
+            return {"url": final, "title": "", "text": text, "links": []}
+        html = response.text
+    soup = BeautifulSoup(html, "html.parser")
+    title = (soup.title.get_text(" ", strip=True) if soup.title else "")[:200]
+    links, seen = [], set()
+    for a in soup.find_all("a", href=True):
+        href = urljoin(final, a["href"].strip()).split("#")[0]
+        label = " ".join(a.get_text(" ", strip=True).split())[:120]
+        if href.startswith("http") and href not in seen and href.rstrip("/") != final.rstrip("/") and label:
+            seen.add(href)
+            links.append({"url": href, "text": label})
+    text = _html_text(html)[:MAX_TEXT]
+    if text:
+        remember(url, text)
+    return {"url": final, "title": title, "text": text, "links": links}
 
 
 def remember(url: str, text: str) -> None:

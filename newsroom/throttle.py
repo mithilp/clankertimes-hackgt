@@ -74,3 +74,15 @@ def pause(name: str, seconds: float) -> None:
 
 def paused(name: str) -> float:
     return max(0.0, _state(name).get("paused_until", 0) - time.time())
+
+
+def tally(name: str) -> int:
+    """Count one use of a metered service today, across all processes. Returns today's count."""
+    with _locked(name):
+        state = _state(name)
+        today = time.strftime("%Y-%m-%d")
+        if state.get("day") != today:
+            state["day"], state["uses"] = today, 0
+        state["uses"] = state.get("uses", 0) + 1
+        _save(name, state)
+        return state["uses"]
