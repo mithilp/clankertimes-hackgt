@@ -232,3 +232,62 @@ def test_bossman_next_plan_sees_the_last_pass():
     text = bossman._previous(prev)
     assert "Dead end: news_search('Atlanta'): all sports" in text and "Stored last pass: x" in text
     assert bossman._previous(None) == ""
+
+
+def _leaf(i, **kw):
+    return {"id": f"l{i}", "path": ["Area", f"Part {i}"], "look_for": "", "records": [], "queries": [],
+            "added_by": "survey", "added_at": "", "status": "active", "visits": 0, "last_visit": None,
+            "kept": 0, "empty_visits": 0, **kw}
+
+
+def test_beat_map_prefers_unvisited_and_productive_parts_and_prunes_dead_ones():
+    import random
+    from datetime import datetime, timezone
+    from newsroom import beatmap
+    just_now = datetime.now(timezone.utc).isoformat()
+    m = {"leaves": [_leaf(1), _leaf(2, last_visit=just_now, empty_visits=2), _leaf(3, status="pruned")]}
+    picks = [beatmap.pick(m, 1, random.Random(seed))[0]["id"] for seed in range(200)]
+    assert "l3" not in picks and picks.count("l1") > 190          # never pruned; stale beats just-visited-and-empty
+
+    leaf = m["leaves"][1]
+    beatmap.record_visits(m, [leaf], [{"leaf": "l2", "kept": 0}])
+    assert leaf["status"] == "pruned" and leaf["visits"] == 1
+    beatmap.record_visits(m, [m["leaves"][0]], [{"leaf": "l1", "kept": 2}])
+    assert m["leaves"][0]["kept"] == 2 and m["leaves"][0]["empty_visits"] == 0
+
+    added = beatmap.add(m, [{"path": ["Area", "Part 1"]}, {"path": ["Area", "Brand new"], "look_for": "x"}])
+    assert [x["path"][-1] for x in added] == ["Brand new"] and added[0]["added_by"] == "reflection"
+
+
+def test_bossman_focused_pass_runs_sweep_and_skips_what_it_already_judged(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    from newsroom import beatmap, gather
+    beatmap.save("georgia-tech", {"beat": "georgia-tech", "built_at": "", "leaves": [_leaf(1)],
+                                  "sweep": [{"tool": "subreddit", "arg": "gatech", "why": "breaking"}]})
+
+    def fake_step(tool, arg):
+        return [cand("reddit:a", "Housing fee jumps 12%", "https://reddit.com/r/gatech/a")] if arg == "gatech" else []
+
+    systems = []
+
+    def fake_llm(system, user, **kw):
+        systems.append(system)
+        if "plan this pass" in system:
+            return {"steps": [{"tool": "news_search", "arg": "GT fees", "why": "focus", "leaf": "l1"}]}
+        if "look back at this pass" in system:
+            return {"assessment": "ok", "new_leaves": [{"path": ["Money", "Housing rates"]}]}
+        ids = [line.split("]")[0][1:] for line in user.splitlines() if line.startswith("[")]
+        return {"signals": [], "skipped": [{"candidate_id": i, "reason": "meh"} for i in ids]}
+
+    monkeypatch.setattr(gather, "run_step", fake_step)
+    monkeypatch.setattr(llm, "ask_json", fake_llm)
+    first = bossman.run_once(InMemorySignals(), beat="georgia-tech", say=lambda *_: None)
+    assert any("Part 1" in s for s in systems if "plan this pass" in s)            # the focus reached the plan
+    trace = first["trace"]
+    assert trace[0]["leaf"] == "sweep" and trace[1]["leaf"] == "l1"
+    assert first["candidates"] == 1
+
+    second = bossman.run_once(InMemorySignals(), beat="georgia-tech", say=lambda *_: None)
+    assert second["candidates"] == 0 and second["trace"][0]["already_judged"] == 1   # not judged twice
+    m = beatmap.load("georgia-tech")
+    assert m["leaves"][0]["visits"] == 2 and [x["path"] for x in m["leaves"]][-1] == ["Money", "Housing rates"]

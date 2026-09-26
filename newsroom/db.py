@@ -122,6 +122,13 @@ create table if not exists reviewed (     -- claim groups the reporter has judge
   at      text not null,
   primary key (source, product, label)
 );
+create table if not exists judged (       -- candidates a Bossman beat already judged, so passes don't re-judge them
+  beat    text not null,
+  id      text not null,
+  at      text not null,
+  outcome text not null,                  -- kept | skipped
+  primary key (beat, id)
+);
 create table if not exists llm_cache (key text primary key, response text not null);
 create table if not exists llm_usage (at text not null, model text not null, prompt_tokens integer, completion_tokens integer);
 create table if not exists pages (url text primary key, fetched text not null, text text not null);

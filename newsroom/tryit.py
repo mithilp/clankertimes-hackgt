@@ -42,7 +42,7 @@ def add_parser(sub) -> None:
     b.add_argument("--gather-only", action="store_true", help="fetch and save candidates; no model calls")
     b.add_argument("--loop", type=float, metavar="MINUTES", help="keep running a pass every N minutes")
     b.add_argument("--passes", type=int, help="with --loop: stop after this many passes")
-    b.add_argument("--calls", type=int, default=14, help="with --beat: most calls to plan per pass (default 14)")
+    b.add_argument("--calls", type=int, default=40, help="with --beat: a ceiling on calls per pass; the plan picks how many (default 40)")
 
     m = agents.add_parser("mclovin", help="read signals and write falsifiable hypotheses")
     m.add_argument("--hours", type=float, default=24, help="read signals last seen in the past N hours")
@@ -97,7 +97,7 @@ def _bossman(args) -> None:
         print(f"saved {path}  (judge them later with --replay {path})")
         return
     store = get_store()
-    previous, n = None, 0
+    previous, n, quiet = None, 0, 0
     while True:
         n += 1
         if args.loop:
@@ -128,8 +128,12 @@ def _bossman(args) -> None:
             print(f"saved {report['run_dir']}/")
         if not args.loop or args.replay or (args.passes and n >= args.passes):
             return
-        print(f"next pass in {args.loop:g} minutes (ctrl-c to stop)")
-        time.sleep(args.loop * 60)
+        # A pass that stores nothing new doubles the wait, up to an hour; a new signal resets it.
+        quiet = 0 if report and report["created"] else quiet + 1
+        wait = min(args.loop * 2 ** quiet, max(args.loop, 60))
+        print(f"next pass in {wait:g} minutes" + (f" ({quiet} quiet pass{'es' if quiet > 1 else ''} in a row)" if quiet else "")
+              + " (ctrl-c to stop)")
+        time.sleep(wait * 60)
 
 
 def _print_beat_pass(report: dict) -> None:
@@ -139,9 +143,20 @@ def _print_beat_pass(report: dict) -> None:
     print("\ncalls:")
     for t in json.loads((run / "trace.json").read_text(encoding="utf-8")):
         tag = "follow-up " if t["round"] == 2 else ""
-        result = f"ERROR {t['error'][:80]}" if t["error"] else f"{t['returned']} found, {t['new']} new, {t['kept']} kept"
-        print(f"  {t['step']:>2}. {tag}{t['tool']}({t['arg']!r}): {result}")
+        result = f"ERROR {t['error'][:80]}" if t["error"] else (
+            f"{t['returned']} found, {t['new']} new, {t.get('already_judged', 0)} judged before, {t['kept']} kept")
+        leaf = f"[{t['leaf']}] " if t.get("leaf") else ""
+        print(f"  {t['step']:>2}. {tag}{leaf}{t['tool']}({t['arg']!r}): {result}")
     r = report.get("reflection") or {}
+    m = r.get("map") or {}
+    if m.get("note"):
+        print(f"\nmap: {m['note']}")
+    if m.get("focus"):
+        print(f"\nfocus this pass: {' | '.join(m['focus'])}")
+    for x in m.get("added", []):
+        print(f"  map + {x}")
+    for x in m.get("pruned", []):
+        print(f"  map - {x} (came up empty too many visits in a row)")
     if r.get("assessment"):
         print(f"\nlooking back: {r['assessment']}")
     for d in r.get("dead_ends", []):

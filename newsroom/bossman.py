@@ -20,11 +20,11 @@ from __future__ import annotations
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from . import gather as gatherers
-from . import config, llm, playbooks
+from . import beatmap, config, db, llm, playbooks
 from .signals import Signal, SignalStore
 
 BATCH = 40
@@ -60,14 +60,33 @@ PLAN = """
 You are about to search for candidates on the beat described above. Choose the calls to make. Tools:
 
 {tools}
-
-Choose 8-{max_calls} calls. Cover the beat's different kinds of interesting (money, safety, governance...), not
-ten phrasings of one search. Prefer sources that show what is moving now. For each call say what you
-expect it to surface, so we can later see which expectations held.
+{focus}
+Make as many calls as this pass needs: usually 8-25, never more than {max_calls}. Don't pad the plan:
+ten phrasings of one search is one search. Prefer sources that show what is moving now. For each call
+say what you expect it to surface, so we can later see which expectations held.
 
 Reply with JSON only:
-{{"steps": [{{"tool": "<tool name>", "arg": "<argument, or empty for a national feed>", "why": "what you expect it to surface"}}],
+{{"steps": [{{"tool": "<tool name>", "arg": "<argument, or empty for a national feed>", "why": "what you expect it to surface", "leaf": "<id of the focus part it serves, or empty>"}}],
  "notes": "anything about the plan worth recording"}}
+"""
+
+SURVEY = """
+## This is a survey pass
+
+No map of this beat exists yet. Plan a broad pass across the whole beat. After it, the beat will be
+broken into specific parts from what you find, and later passes will take those parts one or two at
+a time.
+"""
+
+FOCUS = """
+## Focus for this pass
+
+This beat is covered a part at a time. Spend most of this pass's calls on the parts below, going
+deeper than a broad search would: their records, the institutions' own sites and feeds, the offices
+and programs by name. Tag each call with the id of the part it serves. These sweep calls for breaking
+news already run on every pass, so don't repeat them: {sweep}
+
+{leaves}
 """
 
 REFLECT = """
@@ -84,14 +103,17 @@ Decide:
 - which calls were productive;
 - which leads deserve ONE follow-up call now: a signal whose records trail you could start on, or a
   skipped candidate that was close. At most {max_follow} follow-ups, using the same tools;
-- what should change in the beat file for next time.
+- what should change in the beat file for next time;
+- which parts of the beat this pass revealed that the map (listed after the signals) doesn't cover:
+  at most 3, each specific enough that 2-4 searches could check it.
 
 Reply with JSON only:
 {{"assessment": "two or three sentences on how the pass went",
  "dead_ends": [{{"step": <n>, "why": "..."}}],
  "productive": [{{"step": <n>, "why": "..."}}],
  "follow_ups": [{{"tool": "...", "arg": "...", "why": "...", "lead": "the signal or candidate it follows"}}],
- "beat_notes": ["a concrete edit to the beat file", ...]}}
+ "beat_notes": ["a concrete edit to the beat file", ...],
+ "new_leaves": [{{"path": ["area", "specific part"], "look_for": "...", "records": ["..."], "queries": [{{"tool": "...", "arg": "..."}}]}}]}}
 """
 
 CONSOLIDATE = """
@@ -222,14 +244,14 @@ def _previous(prev: dict | None) -> str:
             "news moves. Spend the rest on parts of the beat it didn't reach.\n").format(when=prev.get("when", "")) + "\n".join(lines)
 
 
-def plan(beat_text: str, *, max_calls: int = 14, previous: dict | None = None) -> dict:
+def plan(beat_text: str, *, max_calls: int = 40, previous: dict | None = None, focus: str = "") -> dict:
     """Which searches and feeds to run for this beat."""
-    reply = llm.ask_json(_system(beat_text) + "\n" + PLAN.format(tools=_tool_listing(), max_calls=max(max_calls, 8)),
+    reply = llm.ask_json(_system(beat_text) + "\n" + PLAN.format(tools=_tool_listing(), max_calls=max(max_calls, 8), focus=focus),
                          "Plan this pass." + _previous(previous), model=config.load().smart_model,
                          max_tokens=1500 + 150 * max_calls)
     steps = [{"tool": str(s.get("tool", "")).strip(), "arg": str(s.get("arg", "") or "").strip(),
-              "why": str(s.get("why", "")).strip()}
-             for s in reply.get("steps", []) if isinstance(s, dict)]
+              "why": str(s.get("why", "")).strip(), "leaf": str(s.get("leaf", "") or "").strip()}
+             for s in reply.get("steps", []) if isinstance(s, dict)][:max(max_calls, 8)]
     return {"steps": steps, "notes": str(reply.get("notes", ""))}
 
 
@@ -279,7 +301,8 @@ def _outcomes(trace: list[dict], candidates: list[dict], decisions: dict) -> Non
         t["skip_reasons"] = [reasons[c["id"]] for c in mine if c["id"] in reasons][:8]
 
 
-def reflect(beat_text: str, trace: list[dict], signals: list[dict], max_follow: int = MAX_FOLLOW_UPS) -> dict:
+def reflect(beat_text: str, trace: list[dict], signals: list[dict], max_follow: int = MAX_FOLLOW_UPS,
+            map_parts: str = "") -> dict:
     """Look back at the pass: dead ends, productive calls, follow-ups, and edits to the beat."""
     listing = "\n\n".join(
         f"step {t['step']}: {t['tool']}({t['arg']!r}) - expected: {t['why']}\n"
@@ -289,7 +312,8 @@ def reflect(beat_text: str, trace: list[dict], signals: list[dict], max_follow: 
         for t in trace)
     kept = "\n".join(f"- {s.get('summary', '')}" for s in signals) or "(none)"
     reply = llm.ask_json(_system(beat_text) + "\n" + REFLECT.format(max_follow=max_follow),
-                         f"CALLS:\n\n{listing}\n\nSIGNALS THIS PASS ({len(signals)}):\n{kept}\n\nTools:\n{_tool_listing()}",
+                         f"CALLS:\n\n{listing}\n\nSIGNALS THIS PASS ({len(signals)}):\n{kept}"
+                         f"\n\nTHE MAP'S PARTS:\n{map_parts or '(no map yet)'}\n\nTools:\n{_tool_listing()}",
                          model=config.load().smart_model, max_tokens=3000)
     follow = [{"tool": str(f.get("tool", "")).strip(), "arg": str(f.get("arg", "") or "").strip(),
                "why": str(f.get("why", "")).strip(), "lead": str(f.get("lead", "")).strip()}
@@ -298,7 +322,8 @@ def reflect(beat_text: str, trace: list[dict], signals: list[dict], max_follow: 
             "dead_ends": [d for d in reply.get("dead_ends", []) if isinstance(d, dict)],
             "productive": [d for d in reply.get("productive", []) if isinstance(d, dict)],
             "follow_ups": follow,
-            "beat_notes": [str(n) for n in reply.get("beat_notes", []) if str(n).strip()]}
+            "beat_notes": [str(n) for n in reply.get("beat_notes", []) if str(n).strip()],
+            "new_leaves": [x for x in reply.get("new_leaves", []) if isinstance(x, dict)]}
 
 
 def to_signals(decisions: dict, candidates: list[dict], beat: str = "") -> list[Signal]:
@@ -332,6 +357,30 @@ def to_signals(decisions: dict, candidates: list[dict], beat: str = "") -> list[
             beats=[beat] if beat else [],
         ))
     return out
+
+
+JUDGED_DAYS = 14
+
+
+def drop_judged(beat: str, candidates: list[dict], trace: list[dict]) -> list[dict]:
+    """Leave out candidates this beat already judged in the last JUDGED_DAYS days, and note per call
+    how many were left out. Quiet passes then cost almost nothing."""
+    since = (datetime.now(timezone.utc) - timedelta(days=JUDGED_DAYS)).isoformat(timespec="seconds")
+    with db.session() as conn:
+        seen = {r["id"] for r in conn.execute("select id from judged where beat = ? and at >= ?", (beat, since))}
+    for t in trace:
+        t["already_judged"] = sum(c["id"] in seen for c in candidates if t["step"] in c.get("found_by", []))
+    return [c for c in candidates if c["id"] not in seen]
+
+
+def mark_judged(beat: str, candidates: list[dict], decisions: dict) -> None:
+    by_hash = {c["id"].split(":", 1)[-1]: c["id"] for c in candidates}
+    kept = {by_hash.get(str(i).strip().strip("[]").split(":", 1)[-1])
+            for d in decisions.get("signals", []) for i in d.get("candidate_ids", [])}
+    at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    with db.session() as conn:
+        conn.executemany("insert or replace into judged (beat, id, at, outcome) values (?, ?, ?, ?)",
+                         [(beat, c["id"], at, "kept" if c["id"] in kept else "skipped") for c in candidates])
 
 
 def same_event(store: SignalStore, signal: Signal) -> Signal | None:
@@ -380,24 +429,45 @@ def hard_checks(signal: Signal) -> list[str]:
 
 
 def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Path | None = None,
-             beat: str | None = None, max_calls: int = 14, previous: dict | None = None, say=print) -> dict:
+             beat: str | None = None, max_calls: int = 40, previous: dict | None = None, say=print) -> dict:
     """One pass: gather (or load a saved gather), judge, check, store. Saves everything it saw.
-    With a beat: plan, run the plan, judge, reflect, run the follow-ups, judge those."""
+    With a beat: plan, run the plan, judge, reflect, run the follow-ups, judge those. The first pass on
+    a beat is a survey that maps it (newsroom/beatmap.py); later passes focus on one or two parts of the
+    map, plus a sweep for breaking news, and skip anything the beat already judged."""
     out = run_dir()
     beat_name, beat_text = load_beat(beat) if beat else ("", None)
-    trace, plan_, reflection = [], None, None
+    trace, plan_, reflection, bmap, focus_leaves, map_note = [], None, None, None, [], ""
     if replay:
         candidates, errors = json.loads(Path(replay).read_text(encoding="utf-8")), {}
         say(f"replaying {len(candidates)} saved candidates from {replay}")
     elif beat_text:
-        plan_ = plan(beat_text, max_calls=max_calls, previous=previous)
+        bmap = beatmap.load(beat_name)
+        if bmap and not beatmap.active(bmap):
+            bmap = None                      # every part was pruned (or the map came back empty): survey again
+        if bmap:
+            focus_leaves = beatmap.pick(bmap, 2)
+            sweep = [{**s, "leaf": "sweep"} for s in bmap.get("sweep", [])]
+            focus = FOCUS.format(sweep="; ".join(f"{s['tool']}({s['arg']!r})" for s in sweep) or "none",
+                                 leaves=beatmap.describe(focus_leaves))
+            say(f"beat {beat_name}: focus on " + " | ".join(" > ".join(x["path"]) for x in focus_leaves))
+        else:
+            sweep, focus = [], SURVEY
+            say(f"beat {beat_name}: no map yet, so this pass is a survey")
+        plan_ = plan(beat_text, max_calls=max_calls, previous=previous, focus=focus)
+        plan_["focus"] = [{"id": x["id"], "path": x["path"]} for x in focus_leaves]
         (out / "plan.json").write_text(json.dumps(plan_, indent=1, ensure_ascii=False), encoding="utf-8")
-        say(f"beat {beat_name}: planned {len(plan_['steps'])} calls")
-        steps = plan_["steps"] + [{"tool": s, "arg": "", "why": "requested with --sources"} for s in sources or []]
+        say(f"planned {len(plan_['steps'])} calls, plus {len(sweep)} sweep calls")
+        steps = sweep + plan_["steps"] + [{"tool": s, "arg": "", "why": "requested with --sources"} for s in sources or []]
         known: dict = {}
-        candidates, trace = run_steps(steps, round_no=1, known=known)
+        gathered, trace = run_steps(steps, round_no=1, known=known)
+        candidates = drop_judged(beat_name, gathered, trace)
         errors = {f"step {t['step']}": t["error"] for t in trace if t["error"]}
-        say(f"gathered {len(candidates)} candidates" + (f"; failed: {errors}" if errors else ""))
+        say(f"gathered {len(gathered)} candidates, {len(gathered) - len(candidates)} already judged on earlier passes"
+            + (f"; failed: {errors}" if errors else ""))
+        if bmap is None:
+            bmap = beatmap.build(beat_name, _system(beat_text), _tool_listing(), gathered)
+            map_note = f"mapped the beat into {len(bmap['leaves'])} parts ({beatmap.path(beat_name)})"
+            say(map_note)
     else:
         candidates, errors = gather(sources)
         say(f"gathered {len(candidates)} candidates" + (f"; failed sources: {errors}" if errors else ""))
@@ -407,10 +477,12 @@ def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Pa
 
     if plan_ is not None:
         _outcomes(trace, candidates, decisions)
-        reflection = reflect(beat_text, trace, decisions["signals"], max_follow=max(MAX_FOLLOW_UPS, max_calls // 4))
+        reflection = reflect(beat_text, trace, decisions["signals"], max_follow=max(MAX_FOLLOW_UPS, max_calls // 5),
+                             map_parts="\n".join(" > ".join(x["path"]) for x in beatmap.active(bmap)) if bmap else "")
         say(f"reflected: {len(reflection['dead_ends'])} dead ends, {len(reflection['follow_ups'])} follow-ups")
         if reflection["follow_ups"]:
             more, trace2 = run_steps(reflection["follow_ups"], round_no=2, first=len(trace) + 1, known=known)
+            more = drop_judged(beat_name, more, trace2)
             say(f"follow-ups gathered {len(more)} new candidates")
             if more:
                 more_decisions = judge(more, beat_text)
@@ -420,6 +492,15 @@ def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Pa
             candidates += more
             trace += trace2
             _outcomes(trace, candidates, decisions)
+        mark_judged(beat_name, candidates, decisions)
+        if bmap is not None:
+            beatmap.record_visits(bmap, focus_leaves, trace)
+            added = beatmap.add(bmap, reflection.get("new_leaves", []))
+            beatmap.save(beat_name, bmap)
+            pruned = [" > ".join(x["path"]) for x in focus_leaves if x["status"] == "pruned"]
+            reflection["map"] = {"note": map_note, "focus": [" > ".join(x["path"]) for x in focus_leaves],
+                                 "added": [" > ".join(x["path"]) for x in added], "pruned": pruned,
+                                 "active_parts": len(beatmap.active(bmap))}
         (out / "reflection.json").write_text(json.dumps(reflection, indent=1, ensure_ascii=False), encoding="utf-8")
         (out / "trace.json").write_text(json.dumps(trace, indent=1, ensure_ascii=False), encoding="utf-8")
 
