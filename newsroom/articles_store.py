@@ -33,8 +33,10 @@ def _ts(iso: str) -> datetime:
 
 
 def to_document(slug: str, article: dict, sources: dict[str, dict], *, beats: list[str] | None = None,
-                published_at: str | None = None, reporting: dict | None = None,
-                council: list[dict] | None = None) -> dict:
+                published_at: str | None = None, timeline: list[dict] | None = None) -> dict:
+    """timeline: how the story came together, oldest first, as [{at, who, text, result}], where who is the
+    agent ("Technology desk", "Scout 2", "Skeptic") and result is "", confirmed, unclear, revise, approved,
+    published or corrected. Record the path that led to the story; leave out dead ends and cut material."""
     """The site's article shape, from the pipeline's (headline, paragraphs of {text, cite}, sources)."""
     return {
         "slug": slug, "status": "published", "sample": False, "beats": beats or [],
@@ -46,7 +48,7 @@ def to_document(slug: str, article: dict, sources: dict[str, dict], *, beats: li
                           "url": s.get("url", ""), "accessed": s.get("accessed", ""),
                           "quote": (s.get("quote") or s.get("text") or "")[:600]}
                     for sid, s in sources.items()},
-        "reporting": reporting, "council": council or [], "corrections": [],
+        "timeline": timeline or [], "corrections": [],
     }
 
 

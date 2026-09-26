@@ -15,7 +15,14 @@ export type Source = {
   quote?: string;
 };
 
-export type Check = { claim: string; result: string; note?: string };
+// One step in how the story came together, oldest first. Dead ends and material that was cut are
+// not recorded here; the timeline shows the path that led to the story.
+export type Step = {
+  at: string;
+  who: string;          // the agent: "Technology desk", "Scout 2", "Skeptic", "Published"
+  text: string;
+  result?: "" | "confirmed" | "unclear" | "revise" | "approved" | "published" | "corrected";
+};
 
 export type Article = {
   slug: string;
@@ -28,8 +35,7 @@ export type Article = {
   published_at: string;
   paragraphs: Sentence[][];
   sources: Record<string, Source>;
-  reporting?: { hypothesis: string; checks: Check[]; verdict?: string };
-  council?: { judge: string; verdict: string; note?: string }[];
+  timeline?: Step[];
   corrections?: { at: string; text: string }[];
 };
 
@@ -44,7 +50,7 @@ export const SECTIONS: Record<string, string> = {
 
 const FIELDS = [
   "slug", "sample", "status", "beats", "kicker", "headline", "dek", "published_at",
-  "paragraphs", "sources", "reporting", "council", "corrections",
+  "paragraphs", "sources", "timeline", "corrections",
 ] as const;
 
 function collection() {

@@ -29,7 +29,8 @@ them out before launch, from the repo root:
 
 `lib/articles.ts` has the type. Each sentence carries the ids of the sources it cites; each source
 carries its URL and the quoted passage. The article page turns that into footnotes that show the
-passage on hover, plus a source list, the reporting checks, the council's review and corrections.
+passage on hover, then "How this story came together" (the article's `timeline`: each agent step in order,
+with dead ends and cut material left out), the source list and corrections.
 
 ## Pages
 
