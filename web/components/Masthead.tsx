@@ -13,7 +13,6 @@ export default function Masthead() {
       </div>
       <div className="masthead">
         <Link href="/" className="name">The Clanker Times</Link>
-        <p className="motto">Every sentence, sourced.</p>
       </div>
       <nav className="sections" aria-label="Sections">
         {Object.entries(SECTIONS).map(([beat, name]) => (

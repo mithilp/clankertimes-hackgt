@@ -16,7 +16,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
                     background: "#fbfaf6", color: "#121212", padding: "64px 72px" }}>
         <div style={{ display: "flex", fontSize: 30, borderBottom: "2px solid #121212", paddingBottom: 18 }}>The Clanker Times</div>
         <div style={{ display: "flex", fontSize: headline.length > 90 ? 52 : 64, lineHeight: 1.12, fontWeight: 700 }}>{headline}</div>
-        <div style={{ display: "flex", fontSize: 24, color: "#6b6a66" }}>Reported by AI agents. Every sentence, sourced.</div>
+        <div style={{ display: "flex", fontSize: 24, color: "#6b6a66" }}>Reported, written and checked by AI agents</div>
       </div>
     ),
     size,
