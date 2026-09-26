@@ -35,7 +35,9 @@ def add_parser(sub) -> None:
     agents = p.add_subparsers(dest="agent", required=True)
 
     b = agents.add_parser("bossman", help="gather live candidates and decide which become signals")
-    b.add_argument("--sources", help="comma-separated; default all: google_trends,google_news,bluesky,reddit,polymarket,gov,hacker_news")
+    b.add_argument("--beat", help="focus on a beat: a name under agents/bossman/beats/ (e.g. georgia-tech) or a .md path")
+    b.add_argument("--sources", help="comma-separated; default all: google_trends,google_news,bluesky,reddit,polymarket,gov,hacker_news."
+                   " With --beat, these national feeds are added to the planned calls")
     b.add_argument("--replay", type=Path, help="rerun the judge on a saved runs/bossman/<ts>/candidates.json")
     b.add_argument("--gather-only", action="store_true", help="fetch and save candidates; no model calls")
     b.add_argument("--loop", type=float, metavar="MINUTES", help="keep running a pass every N minutes")
@@ -94,7 +96,8 @@ def _bossman(args) -> None:
         return
     store = get_store()
     while True:
-        report = bossman.run_once(store, sources=sources, replay=args.replay)
+        report = bossman.run_once(store, sources=sources, replay=args.replay, beat=args.beat)
+        _print_beat_pass(report)
         print(f"\n{report['candidates']} candidates -> {len(report['created'])} new signals, "
               f"{len(report['merged'])} merged into existing, {report['skipped']} skipped, "
               f"{len(report['failed_checks'])} failed checks")
@@ -109,6 +112,24 @@ def _bossman(args) -> None:
             return
         print(f"next pass in {args.loop:g} minutes (ctrl-c to stop)")
         time.sleep(args.loop * 60)
+
+
+def _print_beat_pass(report: dict) -> None:
+    run = Path(report["run_dir"])
+    if not (run / "trace.json").exists():
+        return
+    print("\ncalls:")
+    for t in json.loads((run / "trace.json").read_text(encoding="utf-8")):
+        tag = "follow-up " if t["round"] == 2 else ""
+        result = f"ERROR {t['error'][:80]}" if t["error"] else f"{t['returned']} found, {t['new']} new, {t['kept']} kept"
+        print(f"  {t['step']:>2}. {tag}{t['tool']}({t['arg']!r}): {result}")
+    r = report.get("reflection") or {}
+    if r.get("assessment"):
+        print(f"\nlooking back: {r['assessment']}")
+    for d in r.get("dead_ends", []):
+        print(f"  dead end, step {d.get('step')}: {d.get('why', '')}")
+    for n in r.get("beat_notes", []):
+        print(f"  beat note: {n}")
 
 
 # --- mclovin -----------------------------------------------------------------------------------

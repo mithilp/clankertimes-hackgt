@@ -105,6 +105,7 @@ class AstraSignals:
             last_seen = max(existing.last_seen, seen)
             update = {"sources": existing.sources + [s for s in signal.sources if s.get("url") not in known],
                       "source_types": sorted(set(existing.source_types) | set(signal.source_types)),
+                      "beats": sorted(set(existing.beats) | set(signal.beats)),
                       "last_seen": last_seen, "last_seen_at": _at(last_seen)}
             if signal.spike:
                 update["spike"] = signal.spike           # the newest evidence it is moving

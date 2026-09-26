@@ -3,6 +3,14 @@ import pytest
 from newsroom import db
 
 
+@pytest.fixture(autouse=True)
+def default_backends(monkeypatch):
+    """Tests assume the default backends, whatever a developer's .env picks (e.g. claude_code, browser),
+    so a local .env can never make the suite call a real model or open a browser."""
+    monkeypatch.setenv("NEWSROOM_LLM_PROVIDER", "deepseek")
+    monkeypatch.setenv("NEWSROOM_SEARCH_BACKEND", "brave")
+
+
 @pytest.fixture
 def conn(tmp_path, monkeypatch):
     """A fresh database in a temp folder, with no API keys, so tests never reach the network."""

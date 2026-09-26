@@ -20,17 +20,23 @@ class SearchError(RuntimeError):
 
 def search(query: str, count: int = 10) -> list[dict]:
     """Brave by default; NEWSROOM_SEARCH_BACKEND=browser searches with a local headless browser instead."""
+    key = config.load().brave_api_key
     if config.load().search_backend == "browser":
         from . import browser
-        return browser.search(query, count)
-    key = config.load().brave_api_key
+        try:
+            return browser.search(query, count)
+        except browser.BrowserError:
+            if not key:
+                raise
+            # The engine blocked us or served junk; the Brave API is the honest fallback.
     if not key:
         raise SearchError("BRAVE_API_KEY is not set: add it to .env")
     response = httpx.get(BRAVE_URL, params={"q": query, "count": count},
                          headers={"X-Subscription-Token": key, "Accept": "application/json"}, timeout=30)
     response.raise_for_status()
     return [
-        {"title": _strip_tags(r.get("title", "")), "url": r["url"], "description": _strip_tags(r.get("description", ""))}
+        {"title": _strip_tags(r.get("title", "")), "url": r["url"], "description": _strip_tags(r.get("description", "")),
+         "engine": "brave"}
         for r in response.json().get("web", {}).get("results", []) if r.get("url")
     ]
 

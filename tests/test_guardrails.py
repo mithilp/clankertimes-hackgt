@@ -59,3 +59,14 @@ def test_existing_checks_still_run():
     assert any("cites no source" in p for p in article.check(draft(("Uncited sentence.", [])), SOURCES))
     problems = article.check(draft(('He said "this quote is not in any source at all".', ["F1"])), SOURCES)
     assert any("quote not found" in p for p in problems), problems
+
+
+def test_browser_search_rejects_results_for_some_other_query():
+    from newsroom.browser import _matches_query
+    junk = [{"title": "Georgia (country) - Wikipedia", "url": "https://en.wikipedia.org/wiki/Georgia_(country)", "description": "A country in the Caucasus"}]
+    real = [{"title": "GTRI wins Air Force contract", "url": "https://gtri.gatech.edu/news/x",
+             "description": "The Georgia Tech Research Institute received a contract"}]
+    assert not _matches_query('"Georgia Tech Research Institute" contract', junk)
+    assert _matches_query('"Georgia Tech Research Institute" contract', real)
+    assert not _matches_query("site:nique.net housing", [{"title": "AITAH", "url": "https://reddit.com/r/AITAH", "description": ""}])
+    assert _matches_query("site:nique.net housing", [{"title": "Housing lottery", "url": "https://www.nique.net/news/1", "description": ""}])

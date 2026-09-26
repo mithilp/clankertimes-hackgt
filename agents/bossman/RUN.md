@@ -37,6 +37,16 @@ Every run prints which provider and models it used, and saves its inputs and out
 
 Sources: `google_trends`, `google_news`, `bluesky`, `reddit`, `polymarket`, `gov` (Federal Register), `hacker_news`. None needs an API key.
 
+**Focus on a beat.** A beat is a file in [beats/](beats/) that says what this Bossman watches, what "interesting" means there, what to skip, and where to look:
+
+```bash
+.venv/bin/python -m newsroom try bossman --beat georgia-tech
+```
+
+With a beat, the fixed national feeds are replaced by a small loop. It plans 8–14 calls from the beat (news searches, subreddits, RSS feeds, Federal Register phrase searches, web searches), runs them, and judges what came back. Then it looks back at which calls were dead ends, runs up to 4 follow-ups, and merges signals that describe the same event. The run folder also gets `plan.json`, `trace.json` (every call and what it yielded) and `reflection.json` (dead ends, follow-ups, and suggested edits to the beat file). `--sources` adds national feeds on top of the plan.
+
+To start a new beat, copy `beats/georgia-tech.md` and rewrite it. Read the `beat_notes` in `reflection.json` after each pass. They are Bossman's suggested edits to the beat, and about one in eight is wrong, so check them before applying.
+
 **Gather without judging** (no model calls, just see what's out there):
 
 ```bash
@@ -73,6 +83,7 @@ In `runs/bossman/<timestamp>/`:
 | `candidates.json` | Everything gathered, exactly as seen |
 | `decisions.json` | What the model decided, including every skip and its reason |
 | `report.json` | What was stored, merged, or rejected |
+| `plan.json`, `trace.json`, `reflection.json` | With `--beat` only: the plan, each call's yield, and the look back |
 
 ## Where signals go
 

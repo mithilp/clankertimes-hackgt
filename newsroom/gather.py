@@ -5,7 +5,8 @@ Each gatherer returns candidates in one shape:
     {"id", "source_type", "title", "url", "snippet", "spike": {"kind", "value"}, "seen_at"}
 
 A failing source returns nothing and is reported, so one outage never stops a pass. Adding a
-source is adding a function here and listing it in GATHERERS.
+source is adding a function here and listing it in GATHERERS. Tools that take an argument (a query,
+a subreddit, a feed URL) go in TOOLS, where a beat's plan can call them.
 
 Not here yet: X/Twitter (no free API), Kalshi (its open-markets feed is mostly sports parlays),
 TikTok. Reddit's JSON API blocks bots, so Reddit comes from its RSS feeds.
@@ -17,6 +18,7 @@ import hashlib
 import json
 import logging
 import re
+import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
@@ -106,25 +108,53 @@ def bluesky_trending(limit: int = 20) -> list[dict]:
     return out
 
 
+_ATOM = {"a": "http://www.w3.org/2005/Atom"}
+_reddit_lock = threading.Lock()
+_reddit_last = [0.0]
+
+
+def _reddit_get(url: str, **params) -> httpx.Response:
+    """Reddit rate-limits unauthenticated feed requests: at most one every 3 seconds from any thread,
+    and on a 429, wait as long as it asks (or 10s, then 20s) and try again."""
+    with _reddit_lock:
+        for attempt in range(3):
+            wait = 3 - (time.monotonic() - _reddit_last[0])
+            if wait > 0:
+                time.sleep(wait)
+            try:
+                return _get(url, **params)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 429 or attempt == 2:
+                    raise
+                retry_after = e.response.headers.get("retry-after", "")
+                time.sleep(min(float(retry_after), 30) if retry_after.replace(".", "", 1).isdigit() else 10 * (attempt + 1))
+            finally:
+                _reddit_last[0] = time.monotonic()
+        raise RuntimeError("unreachable")
+
+
+def _subreddit_feed(sub: str, sort: str, limit: int) -> list[dict]:
+    root = ET.fromstring(_reddit_get(f"https://www.reddit.com/r/{sub}/{sort}/.rss", limit=limit).content)
+    out = []
+    for rank, entry in enumerate(root.findall("a:entry", _ATOM), 1):
+        title = entry.findtext("a:title", default="", namespaces=_ATOM)
+        link = entry.find("a:link", _ATOM)
+        url = link.get("href", "") if link is not None else ""
+        content = _strip(entry.findtext("a:content", default="", namespaces=_ATOM))
+        posted = (entry.findtext("a:published", default="", namespaces=_ATOM) or "")[:16]
+        value = f"#{rank} {sort} in r/{sub}" + (f", posted {posted}" if posted and sort == "new" else "")
+        out.append(candidate("reddit", title, url, content[:300], {"kind": f"{sort}_rank", "value": value}))
+    return out
+
+
 def reddit(limit: int = 10) -> list[dict]:
     """Hot posts from news-heavy subreddits, via RSS (the JSON API blocks bots)."""
-    atom = {"a": "http://www.w3.org/2005/Atom"}
     out = []
-    for n, sub in enumerate(REDDIT_SUBS):
-        if n:
-            time.sleep(2)          # Reddit rate-limits rapid unauthenticated feed requests
+    for sub in REDDIT_SUBS:
         try:
-            root = ET.fromstring(_get(f"https://www.reddit.com/r/{sub}/hot/.rss", limit=limit).content)
+            out += _subreddit_feed(sub, "hot", limit)
         except Exception as e:  # noqa: BLE001 - one subreddit failing shouldn't lose the rest
             log.info("reddit r/%s failed: %s", sub, e)
-            continue
-        for rank, entry in enumerate(root.findall("a:entry", atom), 1):
-            title = entry.findtext("a:title", default="", namespaces=atom)
-            link = entry.find("a:link", atom)
-            url = link.get("href", "") if link is not None else ""
-            content = _strip(entry.findtext("a:content", default="", namespaces=atom))
-            out.append(candidate("reddit", title, url, content[:300],
-                                 {"kind": "hot_rank", "value": f"#{rank} hot in r/{sub}"}))
     return out
 
 
@@ -166,6 +196,103 @@ def hacker_news(limit: int = 20) -> list[dict]:
         out.append(candidate("hacker_news", item.get("title", ""), url, "",
                              {"kind": "points", "value": f"{item.get('score', 0)} points, #{rank} on HN"}))
     return out
+
+
+# --- tools that take an argument, for a beat's plan --------------------------------------------
+# A beat (agents/bossman/beats/) needs sources the national feeds above never carry. Bossman plans
+# which of these to call and with what; the calls themselves are plain code, so a pass can be replayed.
+
+STEP_LIMIT = 20   # candidates kept per tool call
+
+
+def news_search(query: str, limit: int = STEP_LIMIT) -> list[dict]:
+    """Google News search, newest coverage first. Defaults to the past 14 days."""
+    q = query if "when:" in query else f"{query} when:14d"
+    root = ET.fromstring(_get("https://news.google.com/rss/search", q=q, hl="en-US", gl="US", ceid="US:en").content)
+    items = []
+    for item in root.iter("item"):
+        published = item.findtext("pubDate") or ""
+        try:
+            when = datetime.strptime(published, "%a, %d %b %Y %H:%M:%S %Z").replace(tzinfo=timezone.utc)
+        except ValueError:
+            when = datetime.min.replace(tzinfo=timezone.utc)
+        items.append((when, item))
+    out = []
+    for when, item in sorted(items, key=lambda x: x[0], reverse=True)[:limit]:
+        source = item.findtext("source") or ""
+        out.append(candidate("news_search", item.findtext("title") or "", item.findtext("link") or "", source,
+                             {"kind": "published", "value": f"published {when:%Y-%m-%d %H:%M} UTC by {source}"}))
+    return out
+
+
+def subreddit(name: str, limit: int = STEP_LIMIT) -> list[dict]:
+    """One subreddit's newest posts. "gatech" or "gatech:hot" for the hot list instead."""
+    sub, _, sort = name.strip().removeprefix("r/").partition(":")
+    return _subreddit_feed(sub, sort or "new", limit)
+
+
+def feed(url: str, limit: int = STEP_LIMIT) -> list[dict]:
+    """Any RSS or Atom feed."""
+    root = ET.fromstring(_get(url).content)
+    out = []
+    items = list(root.iter("item")) or root.findall("a:entry", _ATOM)
+    for rank, item in enumerate(items[:limit], 1):
+        if item.tag == "item":
+            title, link = item.findtext("title") or "", item.findtext("link") or ""
+            when, text = item.findtext("pubDate") or "", item.findtext("description") or ""
+        else:
+            title = item.findtext("a:title", default="", namespaces=_ATOM)
+            el = item.find("a:link", _ATOM)
+            link = el.get("href", "") if el is not None else ""
+            when = item.findtext("a:updated", default="", namespaces=_ATOM)
+            text = item.findtext("a:summary", default="", namespaces=_ATOM)
+        out.append(candidate("feed", title, link, _strip(text)[:300],
+                             {"kind": "published", "value": f"published {when}" if when else f"#{rank} in feed"}))
+    return out
+
+
+def federal_register_search(term: str, limit: int = STEP_LIMIT) -> list[dict]:
+    """Federal Register documents mentioning a term, newest first. A multi-word term is searched as an
+    exact phrase unless it already has quotes: unquoted, the API matches the words separately, so
+    "Georgia Institute of Technology" returns every notice mentioning Georgia (3,115 vs 146)."""
+    if " " in term.strip() and '"' not in term:
+        term = f'"{term.strip()}"'
+    data = _get("https://www.federalregister.gov/api/v1/documents.json",
+                **{"conditions[term]": term, "per_page": limit, "order": "newest"}).json()
+    out = []
+    for r in data.get("results", []):
+        agencies = ", ".join(a.get("name", "") for a in r.get("agencies") or [] if a.get("name"))
+        out.append(candidate("gov", r.get("title", ""), r.get("html_url", ""),
+                             f"{r.get('type', '')} · {agencies} · {(r.get('abstract') or '')[:250]}",
+                             {"kind": "published", "value": r.get("publication_date", "")}))
+    return out
+
+
+def web_search(query: str, limit: int = 10) -> list[dict]:
+    """A general web search (Brave, or the local browser with NEWSROOM_SEARCH_BACKEND=browser).
+    Results carry no date, so they show what exists, not what is moving."""
+    from . import web
+    return [candidate("web_search", r["title"], r["url"], r.get("description", ""),
+                      {"kind": "search_rank", "value": f"#{rank} {r.get('engine', 'web')} result for {query!r}"})
+            for rank, r in enumerate(web.search(query, count=limit), 1)]
+
+
+TOOLS = {
+    "news_search": (news_search, "query", "Google News search, past 14 days unless the query says when:Nd. Best for what outlets are covering."),
+    "subreddit": (subreddit, "subreddit name", "newest posts in a subreddit; add :hot for the hot list, e.g. gatech:hot"),
+    "feed": (feed, "RSS or Atom URL", "any RSS or Atom feed, e.g. an institution's newsroom"),
+    "federal_register": (federal_register_search, "search term", "Federal Register documents containing the exact phrase, newest first"),
+    "web_search": (web_search, "query", "general web search; undated, so good for finding what exists, weak for what is moving. Keep queries short: site:example.org plus one or two words"),
+}
+
+
+def run_step(tool: str, arg: str) -> list[dict]:
+    """One planned call: a tool from TOOLS with its argument, or a national feed from GATHERERS."""
+    if tool in TOOLS:
+        return TOOLS[tool][0](arg)
+    if tool in GATHERERS:
+        return GATHERERS[tool]()
+    raise ValueError(f"unknown tool {tool!r}")
 
 
 GATHERERS = {

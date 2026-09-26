@@ -48,6 +48,7 @@ class Signal:
     sources: list[dict] = field(default_factory=list)        # [{"url": ..., "seen_at": ...}]
     spike: dict = field(default_factory=dict)                 # evidence it is moving now
     source_types: list[str] = field(default_factory=list)    # e.g. ["x", "reddit", "kalshi", "gov"]
+    beats: list[str] = field(default_factory=list)           # which Bossman beats found it (agents/bossman/beats/)
     # Set by the store:
     id: str = ""
     first_seen: str = ""
@@ -147,6 +148,7 @@ class InMemorySignals:
             known = {s.get("url") for s in existing.sources}
             existing.sources += [s for s in signal.sources if s.get("url") not in known]
             existing.source_types = sorted(set(existing.source_types) | set(signal.source_types))
+            existing.beats = sorted(set(existing.beats) | set(signal.beats))
             existing.last_seen = max(existing.last_seen, seen)
             if signal.spike:
                 existing.spike = signal.spike            # the newest evidence it is moving

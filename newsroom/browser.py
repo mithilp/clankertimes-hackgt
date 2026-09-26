@@ -15,8 +15,8 @@ API by flipping the env var back.
 """
 
 import re
-import threading
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor
 
 from bs4 import BeautifulSoup
 
@@ -41,31 +41,38 @@ class Blocked(BrowserError):
 
 
 class _Browser:
-    """One headless browser for the process, started on first use."""
+    """One headless browser for the process, started on first use.
+
+    Playwright's sync API only works on the thread that started it, and agents call search and fetch
+    from thread pools. So one dedicated thread owns the browser, and every call is queued to it: calls
+    from many threads are safe, and run one page at a time.
+    """
 
     def __init__(self) -> None:
         self._pw = None
         self._browser = None
-        self._lock = threading.Lock()
+        self._thread = ThreadPoolExecutor(max_workers=1, thread_name_prefix="browser")
 
     def _ensure(self):
-        with self._lock:
-            if self._browser is None:
-                try:
-                    from playwright.sync_api import sync_playwright
-                except ImportError as e:
-                    raise BrowserError(
-                        "playwright is not installed: pip install playwright && playwright install chromium"
-                    ) from e
-                channel = config.load().browser_channel
-                self._pw = sync_playwright().start()
-                launch = {"headless": True}
-                if channel:
-                    launch["channel"] = channel      # e.g. "chrome": use the installed browser
-                self._browser = self._pw.chromium.launch(**launch)
-            return self._browser
+        if self._browser is None:
+            try:
+                from playwright.sync_api import sync_playwright
+            except ImportError as e:
+                raise BrowserError(
+                    "playwright is not installed: pip install playwright && playwright install chromium"
+                ) from e
+            channel = config.load().browser_channel
+            self._pw = sync_playwright().start()
+            launch = {"headless": True}
+            if channel:
+                launch["channel"] = channel      # e.g. "chrome": use the installed browser
+            self._browser = self._pw.chromium.launch(**launch)
+        return self._browser
 
     def html(self, url: str, wait_for: str | None = None) -> str:
+        return self._thread.submit(self._html, url, wait_for).result()
+
+    def _html(self, url: str, wait_for: str | None) -> str:
         browser = self._ensure()
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -90,13 +97,15 @@ class _Browser:
             context.close()
 
     def close(self) -> None:
-        with self._lock:
-            if self._browser is not None:
-                self._browser.close()
-                self._browser = None
-            if self._pw is not None:
-                self._pw.stop()
-                self._pw = None
+        self._thread.submit(self._close).result()
+
+    def _close(self) -> None:
+        if self._browser is not None:
+            self._browser.close()
+            self._browser = None
+        if self._pw is not None:
+            self._pw.stop()
+            self._pw = None
 
 
 _browser = _Browser()
@@ -114,10 +123,34 @@ def search(query: str, count: int = 10) -> list[dict]:
             last_error = e
             continue
         results = _parse(html, result_sel, link_sel, snippet_sel, count)
-        if results:
-            return results
-        last_error = BrowserError(f"no results parsed from {urllib.parse.urlparse(url).hostname}")
+        host = urllib.parse.urlparse(url).hostname
+        if not results:
+            last_error = BrowserError(f"no results parsed from {host}")
+        elif not _matches_query(query, results):
+            last_error = BrowserError(f"{host} returned results unrelated to the query (it degrades results "
+                                      "for automated browsers); not using them")
+        else:
+            return [{**r, "engine": host} for r in results]
     raise last_error or BrowserError("every search engine returned nothing")
+
+
+_STOP = {"the", "and", "for", "with", "from", "that", "this", "are", "was", "not"}
+
+
+def _matches_query(query: str, results: list[dict]) -> bool:
+    """Search engines sometimes serve an automated browser plausible-looking results for some other
+    query. Accept a page only if it is plainly about the query: with site:, some result is on that
+    site; otherwise some result mentions at least half of the query's words."""
+    site = re.search(r"site:(\S+)", query)
+    if site:
+        domain = site.group(1).lower().removeprefix("www.")
+        return any((urllib.parse.urlparse(r["url"]).hostname or "").lower().removeprefix("www.").endswith(domain)
+                   for r in results)
+    words = {w for w in re.findall(r"[a-z0-9]{3,}", re.sub(r"(^|\s)-\S+", " ", query.lower())) if w not in _STOP}
+    if not words:
+        return True
+    return any(len(words & set(re.findall(r"[a-z0-9]{3,}", f"{r['title']} {r['description']}".lower()))) * 2 >= len(words)
+               for r in results[:5])
 
 
 def _parse(html: str, result_sel: str, link_sel: str, snippet_sel: str, count: int) -> list[dict]:

@@ -132,3 +132,72 @@ def test_claude_backend_caches_parsed_json_not_raw_replies(monkeypatch, tmp_path
     assert llm_claude.ask_json("sys", "user", model="claude-haiku-4-5") == {"ok": True}   # served from cache
     with db.session() as conn:
         assert _json.loads(conn.execute("select response from llm_cache").fetchone()["response"]) == {"ok": True}
+
+
+def test_bossman_beat_pass_plans_traces_and_follows_up(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    from newsroom import gather
+    calls = []
+
+    def fake_step(tool, arg):
+        calls.append((tool, arg))
+        if arg == "gatech":
+            return [cand("reddit:a", "Housing fee jumps 12% for fall", "https://reddit.com/r/gatech/a"),
+                    cand("reddit:b", "Anyone want to get boba", "https://reddit.com/r/gatech/b")]
+        if arg == "GT housing fee":
+            return [cand("news:c", "Georgia Tech raises housing rates", "https://ajc.com/c", "news_search"),
+                    cand("reddit:a", "Housing fee jumps 12% for fall", "https://reddit.com/r/gatech/a")]
+        return []
+
+    def fake_llm(system, user, **kw):
+        if "plan this pass" in system:
+            return {"steps": [{"tool": "subreddit", "arg": "gatech", "why": "student reaction"},
+                              {"tool": "federal_register", "arg": "Georgia Institute of Technology", "why": "federal"}]}
+        if "look back at this pass" in system:
+            assert "step 2" in user and "0 kept as evidence" in user
+            return {"assessment": "ok", "dead_ends": [{"step": 2, "why": "nothing new"}],
+                    "follow_ups": [{"tool": "news_search", "arg": "GT housing fee", "why": "confirm", "lead": "fee"}],
+                    "beat_notes": ["add the housing office feed"]}
+        ids = [line.split("]")[0][1:] for line in user.splitlines() if line.startswith("[")]
+        keep = [i for i in ids if i in ("reddit:a", "news:c")]
+        return {"signals": [{"candidate_ids": keep, "summary": "Georgia Tech raised housing rates 12%",
+                             "why_interesting": "money", "accountable_party": "Georgia Tech Housing",
+                             "checkable_claim": "rates rose 12%", "records_trail": ["Regents minutes"], "origin": ""}] if keep else [],
+                "skipped": [{"candidate_id": i, "reason": "off beat"} for i in ids if i not in keep]}
+
+    monkeypatch.setattr(gather, "run_step", fake_step)
+    monkeypatch.setattr(llm, "ask_json", fake_llm)
+    store = InMemorySignals()
+    report = bossman.run_once(store, beat="georgia-tech", say=lambda *_: None)
+
+    assert calls[-1] == ("news_search", "GT housing fee")          # the follow-up ran
+    trace = report["reflection"] and __import__("json").loads((tmp_path / report["run_dir"] / "trace.json").read_text())
+    assert [t["round"] for t in trace] == [1, 1, 2]
+    assert trace[0]["kept"] == 1 and trace[0]["skip_reasons"] == ["off beat"]
+    assert trace[2]["new"] == 1                                     # reddit:a was already found in round 1
+    signals = store.recent("")
+    assert signals and all(s.beats == ["georgia-tech"] for s in signals)
+
+
+def test_bossman_consolidates_same_event_signals_from_different_batches(monkeypatch):
+    decisions = {"signals": [
+        {"candidate_ids": ["a"], "summary": "Regents pick Fanning", "records_trail": ["minutes"]},
+        {"candidate_ids": ["b"], "summary": "New residence hall opens", "records_trail": []},
+        {"candidate_ids": ["c", "d"], "summary": "Fanning named sole finalist", "records_trail": ["search contract"]},
+    ], "skipped": []}
+    monkeypatch.setattr(llm, "ask_json", lambda *a, **k: {"groups": [[0, 2], [1, 99]]})
+    assert bossman.consolidate(decisions) == [[0, 2]]
+    assert [s["summary"] for s in decisions["signals"]] == ["New residence hall opens", "Fanning named sole finalist"]
+    merged = decisions["signals"][1]
+    assert merged["candidate_ids"] == ["c", "d", "a"] and merged["records_trail"] == ["search contract", "minutes"]
+
+
+def test_bossman_origin_is_always_a_bare_url():
+    cands = [cand("news:1", "t", "https://ajc.com/story")]
+    base = {"candidate_ids": ["news:1"], "summary": "s", "why_interesting": "w", "checkable_claim": "c",
+            "accountable_party": "a", "records_trail": []}
+    for origin, expected in [("The Atlanta Journal-Constitution", "https://ajc.com/story"),
+                             ("https://www.usg.edu (USG press release, via WABE)", "https://ajc.com/story"),
+                             ("https://www.usg.edu/news/1", "https://www.usg.edu/news/1")]:
+        signal = bossman.to_signals({"signals": [{**base, "origin": origin}]}, cands)[0]
+        assert signal.origin == expected

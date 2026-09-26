@@ -26,7 +26,7 @@ Every agent runs on its own with `python -m newsroom try <agent>`, and each fold
 
 | Agent | Command | How-to |
 |---|---|---|
-| Bossman | `try bossman [--sources ...] [--replay FILE] [--loop MIN]` | [bossman/RUN.md](bossman/RUN.md) |
+| Bossman | `try bossman [--beat NAME] [--sources ...] [--replay FILE] [--loop MIN]` | [bossman/RUN.md](bossman/RUN.md) |
 | McLovin | `try mclovin [--hours N] [--input FILE]` | [mclovin/RUN.md](mclovin/RUN.md) |
 | Reporter | `try reporter --from-mclovin FILE --pick N` or `--hypothesis "..."` | [reporter/RUN.md](reporter/RUN.md) |
 | Scout | `try scout --hypothesis "..." --context "..."` | [scout/RUN.md](scout/RUN.md) |

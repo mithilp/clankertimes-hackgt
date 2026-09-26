@@ -50,6 +50,12 @@ def signal(**kw) -> Signal:
     return Signal(**{**base, **kw})
 
 
+def test_a_merge_keeps_every_beat_that_found_it(store):
+    first, _ = store.add(signal(beats=["national"]))
+    store.add(signal(beats=["georgia-tech"], last_seen="2026-09-26T11:00:00+00:00"))
+    assert store.get(first).beats == ["georgia-tech", "national"]
+
+
 def test_add_creates_and_get_returns_it(store):
     sid, created = store.add(signal())
     assert created and store.get(sid).accountable_party == "Tesla"

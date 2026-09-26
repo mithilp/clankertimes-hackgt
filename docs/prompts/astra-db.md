@@ -21,7 +21,7 @@ Bossman is the only writer, and it calls `add()` one signal at a time. Don't add
 One document per signal, in a collection named `signals` (configurable), with every field on `Signal`:
 
 - `summary`, `why_interesting`, `checkable_claim`, `accountable_party`, `origin`
-- `records_trail` (list of strings), `sources` (list of `{url, seen_at}`), `spike` (dict), `source_types` (list)
+- `records_trail` (list of strings), `sources` (list of `{url, seen_at}`; store each entry as-is, since more keys may be added later), `spike` (dict), `source_types` (list), `beats` (list: which Bossman beats found it)
 - `first_seen`, `last_seen`, `status` (`new` / `used` / `ignored`), `used_by` (list of hypothesis ids), `ignored_reason`
 - `Signal.id` as the document's `_id` (not a separate `id` field), so `get()`, `mark_used()` and `mark_ignored()` are primary-key lookups
 - plus `origin_key` (from `signals.origin_key()`), stored so duplicate detection is a cheap exact lookup. `origin_key()` is already correct; don't change it.
@@ -47,7 +47,7 @@ Timestamps are UTC ISO strings (`2026-09-26T10:00:00+00:00`). `get()`, `recent()
 
    **Don't use the vector score as the merge test.** `NEWSROOM_SIGNAL_MERGE` (default 0.8) is a word-overlap threshold that means "near-identical text". Astra's cosine score is on a different scale, (1 + cosine) / 2, and embeddings put different claims about the same party close together. The Model 3 steering signal and the Cybertruck trim signal in the tests are an example. Vector search finds the candidates; word overlap decides.
 
-   On a merge, do what `InMemorySignals.add()` does: append sources not already present (by URL), set `source_types` to the sorted union, set `last_seen` to the later of the two, and replace `spike` with the incoming one if it isn't empty. Return `(existing_id, False)`.
+   On a merge, do what `InMemorySignals.add()` does: append sources not already present (by URL), set `source_types` and `beats` to their sorted unions, set `last_seen` to the later of the two, and replace `spike` with the incoming one if it isn't empty. Return `(existing_id, False)`.
 3. `similar()` uses Astra vector search, returns `(Signal, score)` with score in 0–1, best first, optionally filtered to `last_seen >= since`. Return Astra's score as it comes; don't try to make it match word overlap.
 4. `recent()` filters on `last_seen` and optional `status`, newest first.
 5. **Indexing:** create the collection with an indexing *allow* list of `last_seen` (and its `$date` copy, if you add one), `status`, `origin_key` and `party_key`. `_id` and the vector are always indexed. Don't index the long text fields; Astra limits indexed string length.
