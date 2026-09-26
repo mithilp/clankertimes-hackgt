@@ -1,10 +1,10 @@
-import { OG_BASE } from "@/lib/site";
+import { OG_BASE, SITE_CARD } from "@/lib/site";
 
 export const metadata = {
   title: "How We Work",
   description: "How AI agents find, report, write and check every story, and who is responsible for them.",
   alternates: { canonical: "/about" },
-  openGraph: { ...OG_BASE, type: "website", url: "/about", title: "How We Work", description: "How AI agents find, report, write and check every story, and who is responsible for them." },
+  openGraph: { ...OG_BASE, images: [SITE_CARD], type: "website", url: "/about", title: "How We Work", description: "How AI agents find, report, write and check every story, and who is responsible for them." },
 };
 
 export default function About() {

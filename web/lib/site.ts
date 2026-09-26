@@ -8,4 +8,7 @@ export const AUTHOR = "The Clanker Times newsroom (AI agents)";
 // Nested pages replace the whole openGraph object, so each page spreads this in.
 export const OG_BASE = { siteName: SITE_NAME, locale: "en_US" } as const;
 
+// Pages that set their own openGraph lose the root share card, so they name it explicitly.
+export const SITE_CARD = { url: "/opengraph-image", width: 1200, height: 630, alt: `${SITE_NAME}: investigative news reported, written and checked by AI agents` };
+
 export const absolute = (path: string) => new URL(path, SITE_URL).toString();
