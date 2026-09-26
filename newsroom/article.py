@@ -128,4 +128,17 @@ def publish(story_id: int, article: dict, sources: dict[str, dict], out_dir: Pat
     slug = re.sub(r"[^a-z0-9]+", "-", article["headline"].lower()).strip("-")[:60]
     path = out_dir / f"{story_id:04d}-{slug}.md"
     path.write_text(render(article, sources, date.today()), encoding="utf-8")
+    _to_site(path.stem, article, sources)
     return path
+
+
+def _to_site(slug: str, article: dict, sources: dict[str, dict]) -> None:
+    """Also publish to the articles collection the website reads, when Astra is configured. A failure
+    here never loses the article: the Markdown file above is already written."""
+    from . import articles_store
+    if not articles_store.configured():
+        return
+    try:
+        articles_store.AstraArticles().save(articles_store.to_document(slug, article, sources))
+    except Exception as e:  # noqa: BLE001 - the site copy is best effort; the file is the record
+        print(f"could not publish {slug} to the site: {type(e).__name__}: {e}")

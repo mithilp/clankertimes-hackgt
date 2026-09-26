@@ -9,6 +9,8 @@ def default_backends(monkeypatch):
     so a local .env can never make the suite call a real model or open a browser."""
     monkeypatch.setenv("NEWSROOM_LLM_PROVIDER", "deepseek")
     monkeypatch.setenv("NEWSROOM_SEARCH_BACKEND", "brave")
+    # Tests publish fake articles; they must never reach the website's Astra collection.
+    monkeypatch.setattr("newsroom.articles_store.configured", lambda: False)
 
 
 @pytest.fixture

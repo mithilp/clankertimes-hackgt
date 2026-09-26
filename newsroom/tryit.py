@@ -62,6 +62,10 @@ def add_parser(sub) -> None:
     s.add_argument("--context", default="", help="a few words naming the product, company or agency")
     s.add_argument("--budget", type=int, default=12)
 
+    a = agents.add_parser("articles", help="list published articles, or load/remove the website's sample articles")
+    a.add_argument("--seed-samples", action="store_true", help="load web/data/sample-articles.json into Astra, marked sample")
+    a.add_argument("--remove-samples", action="store_true", help="delete every sample article from Astra")
+
     c = agents.add_parser("council", help="judge a draft, or measure the council with seeded errors")
     c.add_argument("--draft", type=Path, help="draft JSON (default: tests/fixtures/council_draft.json)")
     c.add_argument("--judges", default="skeptic,virality,novelty")
@@ -74,7 +78,7 @@ def main(args: argparse.Namespace) -> None:
     print(f"[{args.agent}] model: {settings.llm_provider} ({settings.fast_model} / {settings.smart_model})"
           f" · search: {settings.search_backend}")
     {"bossman": _bossman, "mclovin": _mclovin, "reporter": _reporter, "scout": _scout,
-     "council": _council}[args.agent](args)
+     "council": _council, "articles": _articles}[args.agent](args)
 
 
 def _save(kind: str, name: str, data) -> Path:
@@ -221,6 +225,23 @@ def _reporter(args) -> None:
     path = _save("reporter", "result.json", {"hypothesis": hypothesis, "plan": plan, "sub_hypotheses": subs,
                                               "findings": findings, "verdict": verdict, "why": why})
     print(f"saved {path}")
+
+
+# --- articles ------------------------------------------------------------------------------------
+
+def _articles(args) -> None:
+    from . import articles_store
+    if not articles_store.configured():
+        raise SystemExit("Astra isn't configured in .env; the website shows web/data/sample-articles.json instead.")
+    store = articles_store.AstraArticles()
+    if args.seed_samples:
+        print(f"loaded {store.seed_samples()} sample articles into the {store.name} collection")
+    if args.remove_samples:
+        print(f"removed {store.remove_samples()} sample articles")
+    for doc in store.list():
+        tag = " [sample]" if doc.get("sample") else ""
+        print(f"{doc.get('published_at', '')[:10]}  {doc.get('status', ''):<9} {', '.join(doc.get('beats', [])):<14} "
+              f"{doc['headline'][:80]}{tag}")
 
 
 # --- scout -------------------------------------------------------------------------------------
