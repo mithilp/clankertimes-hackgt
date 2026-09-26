@@ -118,16 +118,35 @@ class FileMcLovin:
     def results(self, limit: int = 200) -> list[dict]:
         out = []
         for path in sorted(self.root.glob("*/hypotheses.json"), reverse=True):
-            out += json.loads(path.read_text(encoding="utf-8")).get("hypotheses", [])
+            run = path.parent.name              # e.g. 20260926T182229Z
+            created = f"{run[:4]}-{run[4:6]}-{run[6:8]}T{run[9:11]}:{run[11:13]}:{run[13:15]}Z" if len(run) >= 15 else ""
+            for h in json.loads(path.read_text(encoding="utf-8")).get("hypotheses", []):
+                out.append({**h, "id": f"{run}:{h['id']}" if h.get("id") else None, "created_at": created,
+                            "kind": "hypothesis"})
         return out[:limit]
+
+
+class BothMcLovin:
+    """Every McLovin: the team's results in Astra, and the runs made from this repo, newest first."""
+
+    def __init__(self) -> None:
+        self.sources = [AstraMcLovin(), FileMcLovin()]
+        self.name = " + ".join(s.name for s in self.sources)
+
+    def results(self, limit: int = 200) -> list[dict]:
+        docs = [d for s in self.sources for d in s.results(limit)]
+        docs.sort(key=lambda d: str(d.get("created_at") or d.get("created") or ""), reverse=True)
+        return docs[:limit]
 
 
 def source(kind: str = "auto"):
     if kind == "file":
         return FileMcLovin()
     from .signals import _astra_configured
-    if kind == "astra" or (kind == "auto" and _astra_configured()):
+    if kind == "astra":
         return AstraMcLovin()
+    if kind == "auto" and _astra_configured():
+        return BothMcLovin()
     return FileMcLovin()
 
 
