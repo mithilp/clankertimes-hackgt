@@ -40,5 +40,6 @@ def to_complaint(record: dict) -> dict:
             "product_code": code,
             "generic_name": device.get("generic_name"),
             "report_source": record.get("report_source_code"),
+            "product_problems": record.get("product_problems") or [],
         },
     }

@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import Cite from "@/components/Cite";
 import Sample from "@/components/Sample";
 import Share from "@/components/Share";
+import Timeline from "@/components/Timeline";
 import { AUTHOR, OG_BASE, SITE_NAME, absolute } from "@/lib/site";
 import { SECTIONS, formatDate, getArticle, readingMinutes, sourceOrder } from "@/lib/articles";
 import { smart } from "@/lib/text";
@@ -100,6 +101,7 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
 
       <div className="notes">
         <Share url={url} title={article.headline} />
+        {article.timeline?.length ? <Timeline steps={article.timeline} /> : null}
         <section aria-labelledby="sources">
           <h2 id="sources">Sources</h2>
           <ol className="sources">

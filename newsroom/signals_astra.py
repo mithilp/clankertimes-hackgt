@@ -88,9 +88,11 @@ class AstraSignals:
     def _signal(doc: dict) -> Signal:
         return Signal(id=doc["_id"], **{name: doc[name] for name in SIGNAL_FIELDS if name in doc})
 
-    def _find_duplicate(self, signal: Signal) -> Signal | None:
+    def _find_duplicate(self, signal: Signal, near: bool = True) -> Signal | None:
         if doc := self.collection.find_one({"origin_key": origin_key(signal.origin)}):
             return self._signal(doc)
+        if not near:
+            return None
         candidates = self.collection.find({"party_key": signal.accountable_party.strip().lower()},
                                           sort={"$vectorize": signal.text()[:EMBED_CHARS]}, limit=NEAR_CANDIDATES)
         for doc in candidates:
@@ -99,9 +101,9 @@ class AstraSignals:
                 return existing
         return None
 
-    def add(self, signal: Signal) -> tuple[str, bool]:
+    def add(self, signal: Signal, *, near: bool = True) -> tuple[str, bool]:
         seen = signal.last_seen or now()
-        if existing := self._find_duplicate(signal):
+        if existing := self._find_duplicate(signal, near):
             known = {s.get("url") for s in existing.sources}
             last_seen = max(existing.last_seen, seen)
             update = {"sources": existing.sources + [s for s in signal.sources if s.get("url") not in known],

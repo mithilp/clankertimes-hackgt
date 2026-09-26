@@ -61,6 +61,17 @@ Not included:
 
 ---
 
+### The same records, as signals
+
+`python -m newsroom record-signals` (`newsroom/record_signals.py`) is the signals store's second writer, beside Bossman. It reads these tables and writes two kinds of signal, each built one way for every dataset, with no model calls:
+
+- **A spike in reports:** for NHTSA complaints, OSHA injuries, FAERS, CAERS and MAUDE, one signal per product and problem whose distinct reports in the dataset's latest 90 days are at least 5 and at least twice the usual 90-day level of the year before. The problem is the source's own code: NHTSA's component, OSHA's injury and event, the FDA reaction or device problem.
+- **An official action:** one signal per NHTSA recall (`FLAT_RCL_POST_2010.zip`), NHTSA investigation, FDA recall event (openFDA `device/recall`, `drug/enforcement`, `food/enforcement`) or CPSC recall (saferproducts.gov) dated in the dataset's latest 90 days. `ingest-recalls` loads the three recall sources into the `recalls` table.
+
+At most 50 per dataset per run, strongest first. Individual reports stay in SQLite, and no signal carries a report's narrative. A complaint spike lists the NHTSA recalls and investigations that cover its vehicle and component, or says none do; a recall says how many complaints preceded it. Origins are exact keys (`nhtsa_complaints: 2024 TESLA MODEL 3 / STEERING`), so a rerun merges into the same signals and refreshes their numbers, and these signals are added with `add(near=False)`: templated texts about one company overlap by more than `MERGE_SIMILARITY`, and must not merge.
+
+---
+
 ## 2. Claims
 
 **Coded sources spend no tokens.** FAERS and CAERS reactions and OSHA's injury codes already say what happened, so the claim is taken straight from the codes: "pancreatitis", or "amputation: caught in running powered equipment".

@@ -185,6 +185,25 @@ p { margin: 0; }
 
 .fine { font-size: 15px; color: var(--ink-2); }
 
+/* how this story came together */
+.tl { list-style: none; margin: 4px 0 0; padding: 0; position: relative; }
+.tl::before { content: ""; position: absolute; left: 82.5px; top: 8px; bottom: 8px; width: 1px; background: var(--rule); }
+.tl li { display: grid; grid-template-columns: 64px 22px minmax(0, 1fr); gap: 0 8px; padding-bottom: 16px; }
+.tl li.newday { padding-top: 6px; }
+.tl li:last-child { padding-bottom: 0; }
+.tlday { grid-column: 1 / -1; font-family: var(--sans); font-size: 11.5px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink); margin-bottom: 10px; background: var(--paper); position: relative; z-index: 1; padding-block: 2px; }
+.tl li:first-child .tlday { margin-top: 0; }
+.tl time { font-family: var(--sans); font-size: 12.5px; line-height: 1.9; color: var(--muted); text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tl .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--paper); border: 1.5px solid var(--ink); margin: 7px 0 0 6.5px; position: relative; z-index: 1; }
+.tl li.key .dot { background: var(--ink); }
+.tlbody { display: grid; gap: 2px; font-size: 16px; line-height: 1.5; }
+.tlbody .who { font-family: var(--sans); font-size: 12.5px; font-weight: 600; color: var(--ink-2); }
+.chip { display: inline-block; font-family: var(--sans); font-size: 10.5px; font-weight: 700; letter-spacing: 0.07em; text-transform: uppercase; padding: 3px 6px; border-radius: 2px; white-space: nowrap; vertical-align: 1px; }
+.chip.good { color: var(--good); background: #e8efe3; }
+.chip.warn { color: #7a5a14; background: var(--sample); }
+.chip.bad { color: var(--bad); background: #f6e4df; }
+@media (max-width: 480px) { .tl li { grid-template-columns: 54px 20px minmax(0, 1fr); } .tl::before { left: 72.5px; } }
+
 /* ---- about ---- */
 .prose { max-width: var(--read); margin: 0 auto; padding-block: 34px 50px; }
 .prose h1 { font-size: 40px; margin-bottom: 18px; }

@@ -85,6 +85,18 @@ def test_different_claim_same_party_stays_separate(store):
     assert created
 
 
+def test_origin_only_add_merges_by_origin_but_not_by_text(store):
+    """near=False, for templated signals (newsroom/record_signals.py): the same origin still merges, but
+    near-identical text about the same party doesn't."""
+    first, _ = store.add(signal(origin="nhtsa_complaints: 2024 TESLA MODEL 3 / STEERING"), near=False)
+    _, created = store.add(signal(origin="nhtsa_complaints: 2024 TESLA MODEL 3 / SUSPENSION"), near=False)
+    assert created
+    again, created = store.add(signal(origin="nhtsa_complaints: 2024 TESLA MODEL 3 / STEERING",
+                                      last_seen="2026-09-27T00:00:00+00:00"), near=False)
+    assert again == first and not created
+    assert store.get(first).last_seen == "2026-09-27T00:00:00+00:00"
+
+
 def test_recent_filters_by_time_and_status(store):
     old, _ = store.add(signal(origin="a", last_seen="2026-09-20T00:00:00+00:00"))
     new, _ = store.add(signal(origin="b", summary="Something else entirely about boilers",

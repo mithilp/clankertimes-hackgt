@@ -9,8 +9,9 @@ from pathlib import Path
 import httpx
 import openai
 
-from . import claims, config, count, db, hunt, llm, reporter, tryit, web
-from .sources import bluesky, caers, faers, maude, nhtsa, osha
+from . import claims, config, count, db, hunt, llm, record_signals, reporter, signals, tryit, web
+from .bossman import run_dir
+from .sources import bluesky, caers, cpsc, faers, fda_recalls, maude, nhtsa, osha
 
 SOURCES = ["nhtsa", "maude", "faers", "caers", "osha", "bluesky"]
 
@@ -51,6 +52,18 @@ def main(argv: list[str] | None = None) -> None:
 
     p = sub.add_parser("ingest-investigations", help="download NHTSA defect investigations, for the scouts (no tokens)")
     p.add_argument("--file", type=Path, help="use an already-downloaded zip instead of downloading")
+
+    p = sub.add_parser("ingest-recalls", help="download NHTSA, FDA and CPSC recalls (no tokens)")
+    p.add_argument("--since", type=date.fromisoformat, default=date(2025, 1, 1), help="recalls dated on or after this")
+    p.add_argument("--nhtsa-file", type=Path, help="use an already-downloaded FLAT_RCL_POST_2010.zip")
+    p.add_argument("--only", choices=["nhtsa", "fda", "cpsc"], action="append", help="repeatable; default: all three")
+
+    p = sub.add_parser("record-signals", help="write what is moving in the official records to the signals store "
+                                              "(spikes in reports, new recalls and investigations; no tokens)")
+    p.add_argument("--dataset", choices=record_signals.DATASETS, action="append", help="repeatable; default: all")
+    p.add_argument("--max-per-dataset", type=int, default=record_signals.MAX_PER_DATASET)
+    p.add_argument("--dry-run", action="store_true", help="build and check the signals, save them under runs/records/, "
+                                                           "but don't write to the store")
 
     p = sub.add_parser("claims", help="step 2: read complaints and write down their claims")
     p.add_argument("--limit", type=int, help="read at most this many complaints (useful to test cost first)")
@@ -130,6 +143,29 @@ def main(argv: list[str] | None = None) -> None:
             path = args.file or nhtsa.download_investigations(settings.db_path.parent / "raw")
             investigations, vehicles = nhtsa.save_investigations(conn, path)
             print(f"stored {investigations} NHTSA investigations covering {vehicles} vehicles")
+        elif args.command == "ingest-recalls":
+            loaders = {
+                "nhtsa": lambda: nhtsa.parse_recalls(args.nhtsa_file or nhtsa.download_recalls(settings.db_path.parent / "raw"),
+                                                     since=args.since.isoformat()),
+                "fda": lambda: fda_recalls.fetch(args.since, date.today()),
+                "cpsc": lambda: cpsc.fetch(args.since),
+            }
+            for name in args.only or loaders:
+                try:
+                    print(f"stored {db.save_recalls(conn, loaders[name]())} {name} recalls since {args.since}")
+                except httpx.HTTPError as error:  # one agency being down shouldn't lose the others
+                    print(f"{name} recalls failed ({error}); run again with --only {name}")
+        elif args.command == "record-signals":
+            store = None if args.dry_run else signals.get_store()
+            out = run_dir("records")
+            report = record_signals.run(conn, store, args.dataset, max_per_dataset=args.max_per_dataset, out_dir=out)
+            for slug, r in report.items():
+                written = "" if args.dry_run else f", {r['created']} new, {r['merged']} merged into existing"
+                print(f"{slug:<22} {r['built']:>3} signals{written}  ({r['note']}"
+                      + (f"; data to {r['as_of']})" if r["as_of"] else ")"))
+                for f in r["failed_checks"]:
+                    print(f"    failed checks: {f['summary'][:80]}: {'; '.join(f['problems'])}")
+            print(f"saved {out}/")
         elif args.command == "claims":
             done = claims.extract(conn, min_complaints=settings.min_complaints, limit=args.limit, workers=args.workers,
                                   progress=lambda d, t: print(f"\r{d}/{t} complaints read", end="", flush=True))
