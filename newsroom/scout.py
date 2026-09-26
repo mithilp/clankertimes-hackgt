@@ -1,141 +1,141 @@
-"""Scouts: one loop per beat, all beats in parallel.
+"""Step 6: a scout researches one hypothesis and reports what the sources say.
 
-Each beat is guarded by an advisory lock, so running extra scout replicas is safe: they
-become hot standbys for any beat whose owner dies. Leads are written the moment they're
-found (flash leads) and the insert trigger wakes the managing editor via NOTIFY.
+In its first round, the scout also considers the official records looked up for the story (recalls,
+investigations, lawsuits). Each round, it plans a few Brave searches, picks the most promising results,
+reads them, and pulls out exact quotes. Quotes are checked in code against the page text; a quote that
+isn't on the page is dropped. A scout stops when a source that counts as proof settles the hypothesis,
+or when its budget runs out.
 """
 
-import asyncio
-import json
-import logging
-import random
-from datetime import datetime, timezone
+from . import llm, web
+from .text import contains_quote
 
-from . import db
-from .config import settings
-from .llm import AgentContext, Refused, Tool, run_agent
-from .scoring import fingerprint, score_lead
-from .tools import research_tools
+ROUNDS = 2
+QUERIES_PER_ROUND = 3
+PAGES_PER_ROUND = 5
+MAX_PAGE_CHARS = 30_000
 
-log = logging.getLogger(__name__)
+SOURCE_TYPES = {"government_record", "court_record", "news_report", "company_statement", "complaint", "social", "other"}
+COUNTS_AS_PROOF = {"government_record", "court_record", "news_report"}
+FINDINGS = {"supports", "contradicts", "unclear"}
+SOCIAL_HOSTS = ("reddit.com", "x.com", "twitter.com", "facebook.com", "tiktok.com", "instagram.com",
+                "youtube.com", "quora.com", "threads.net", "bsky.app")
 
-SYSTEM = """You are a scout for an automated local newsroom. Your job is to find leads on your beat and raise them.
+PLAN_SYSTEM = """You plan web searches to test one hypothesis about a product safety problem.
 
-A lead is a falsifiable hypothesis, not a topic. "Atlanta's software contracts" is a topic. "Atlanta paid Vendor X
-$2.1M for permitting software without a competitive bid" is a hypothesis: it can be confirmed or killed.
+Write 3 short search-engine queries. Include at least one that would find evidence for the hypothesis and one that would find evidence against it (for example, a recall or fix that would make it false). Prefer queries that surface government records, court records and news reporting.
 
-How to work:
-- Start with memory_search for your beat's notes so you don't rediscover old ground.
-- Look wherever this beat's news actually surfaces: agendas and minutes, procurement and permit portals, court and
-  agency filings, budgets, inspection data, press releases, local forums, local coverage. There is no approved list.
-- When something looks like a story, raise_lead immediately; don't batch leads to the end.
-- Every lead must be settleable from public records or published material. We do not email or call anyone.
-- Never raise allegations of wrongdoing against a named private individual. Officials, agencies and companies are fine.
-- Skip anything already well covered by local outlets unless you have a genuinely new angle.
-- Before you finish, write one memory_note (kind beat_note) about what you checked this cycle and what to try next.
+Reply in JSON: {"queries": ["...", "...", "..."]}"""
 
-Finish with a two-sentence summary of the cycle."""
+CHOOSE_SYSTEM = """Pick the search results most likely to settle a hypothesis, best first. Prefer government records, court records and news reporting over blogs, forums and complaint sites. Pick at most 5.
 
+Reply in JSON: {"urls": ["...", "..."]}"""
 
-def load_beats() -> list[dict]:
-    return json.loads(settings.beats_file.read_text(encoding="utf-8"))
+READ_SYSTEM = """You check one hypothesis about a specific story against one web page.
 
+1. Decide whether the page says anything about the hypothesis for this story's product, company or employer, and for the same specific problem. General background, definitions, statistics about other products, pages about other companies, and pages about a different problem with the same product (for example a power-steering hardware recall when the story is about driver-assistance software) are not relevant. If the page isn't relevant, reply {"relevant": false}.
+2. Classify the page as one source_type:
+   government_record: a government agency's record, data or statement (recalls, investigations, safety notices)
+   court_record: court filings, rulings or dockets
+   news_report: a news outlet's own reporting
+   company_statement: the company's own site, press release or statement
+   complaint: consumer complaints or reviews, including complaint databases and complaint sites
+   social: social media or forums
+   other: anything else
+3. Copy up to 3 quotes that bear on the hypothesis, each exactly as written on the page (one or two sentences, word for word). For each, say whether it supports, contradicts, or is unclear about the hypothesis. A quote supports or contradicts only if it is about this story's product, company or employer; otherwise leave it out.
+   Use "contradicts" only when the page shows the substance of the hypothesis is false. A wrong detail, such as a date that is off by a few days, is not a contradiction: mark it "supports" or "unclear" and explain in the note.
+   A lawsuit or complaint only shows that someone alleged something: it supports a hypothesis that the allegation was made, not that the allegation is true.
 
-def raise_lead_tool(ctx: AgentContext, beat: dict) -> Tool:
-    async def handler(inp: dict) -> str:
-        lead = {
-            "beat": beat["id"],
-            "hypothesis": inp["hypothesis"].strip(),
-            "why_now": inp["why_now"].strip(),
-            "who_would_know": inp["who_would_know"].strip(),
-            "would_settle_it": inp["would_settle_it"].strip(),
-            "sources_seen": inp.get("sources_seen", []),
-        }
-        p = await db.pool()
-        fp = fingerprint(lead["hypothesis"])
-        if await p.fetchval("select 1 from leads where fingerprint = $1", fp):
-            return "Already raised (same hypothesis). Look for something else."
+Before anything else, write "page_problem": the specific problem the page is about, in a few words (for example "power steering assist circuit board failure" or "FSD software running red lights"), and "same_problem": whether that is the same problem as the hypothesis. If it isn't, the page is not relevant.
 
-        why_now_at = None
-        if inp.get("why_now_date"):
-            try:
-                why_now_at = datetime.fromisoformat(inp["why_now_date"]).replace(tzinfo=timezone.utc)
-            except ValueError:
-                pass
-        s = await score_lead(ctx.agent, lead, why_now_at)
-        lead_id = await p.fetchval(
-            """insert into leads (scout, beat, hypothesis, why_now, why_now_at, who_would_know, would_settle_it,
-                                  score, score_components, score_reason, fingerprint, embedding)
-               values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12::vector)
-               on conflict (fingerprint) do nothing returning id""",
-            ctx.agent, lead["beat"], lead["hypothesis"], lead["why_now"], why_now_at, lead["who_would_know"],
-            lead["would_settle_it"], s["score"], s["components"], s["reason"], s["fingerprint"], db.vec(s["embedding"]),
-        )
-        if lead_id is None:
-            return "Another scout raised this at the same moment. Look for something else."
-        for url in lead["sources_seen"]:
-            source_id, _ = await db.upsert_source(url, ctx.agent)
-            await p.execute("insert into lead_sources values ($1,$2) on conflict do nothing", lead_id, source_id)
-        await db.event(ctx.agent, "lead_raised", f"score {s['score']:.2f}: {s['reason']}",
-                       lead_id=lead_id, detail={"hypothesis": lead["hypothesis"], "components": s["components"]})
-        return f"Raised. Score {s['score']:.2f} ({s['reason']}). The managing editor decides whether to promote it."
-
-    return Tool(
-        "raise_lead",
-        "Raise a lead the moment you find one. It is scored and sent to the managing editor immediately.",
-        {
-            "hypothesis": {"type": "string", "description": "One falsifiable sentence."},
-            "why_now": {"type": "string", "description": "What surfaced it."},
-            "why_now_date": {"type": "string", "description": "ISO date of the triggering item, if known."},
-            "who_would_know": {"type": "string"},
-            "would_settle_it": {"type": "string", "description": "Specific public records or documents."},
-            "sources_seen": {"type": "array", "items": {"type": "string"}, "description": "URLs you looked at."},
-        },
-        ["hypothesis", "why_now", "who_would_know", "would_settle_it"],
-        handler,
-        billable=False,
-    )
+Reply in JSON: {"page_problem": "...", "same_problem": true, "relevant": true, "source_type": "...", "quotes": [{"quote": "...", "finding": "supports", "note": "..."}]}"""
 
 
-async def cycle(beat: dict) -> None:
-    ctx = AgentContext(agent=f"scout:{beat['id']}")
-    p = await db.pool()
-    recent = await p.fetch(
-        "select hypothesis, status, score from leads where beat = $1 order by created_at desc limit 15", beat["id"]
-    )
-    recent_txt = "\n".join(f"- ({r['status']}, {r['score']}) {r['hypothesis']}" for r in recent) or "- none yet"
-    task = (
-        f"Beat: {beat['name']}\n{beat['description']}\n\n"
-        f"Places people often start on this beat (not a limit): {', '.join(beat.get('starting_points', []))}\n\n"
-        f"Leads already raised on this beat (don't repeat them):\n{recent_txt}\n\n"
-        f"Current time: {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC. Start the cycle."
-    )
-    await db.event(ctx.agent, "cycle_start", f"scanning {beat['name']}")
-    summary = await run_agent(
-        ctx, model=settings.models.scout, system=SYSTEM, task=task,
-        tools=[*research_tools(ctx), raise_lead_tool(ctx, beat)],
-        max_turns=settings.scout_max_calls, effort="medium",
-    )
-    await db.event(ctx.agent, "cycle_end", summary[:400] or "cycle finished")
+def research(hypothesis: str, context: str, budget: int, official: list[dict] = ()) -> list[dict]:
+    """Research one hypothesis. Returns findings: url, title, source_type, quote, finding, note.
+
+    official: records already looked up for the story ({"url", "title", "text", "source_type"}); their
+    text must already be in the page cache (web.remember), and their source type is taken as given.
+    """
+    used = 0
+    tried: list[str] = []
+    seen: set[str] = set()
+    findings: list[dict] = []
+    known_type = {r["url"]: r["source_type"] for r in official}
+    for round_no in range(ROUNDS):
+        results = []
+        if round_no == 0:
+            for record in official:
+                seen.add(record["url"])
+                results.append({"url": record["url"], "title": f"[official record] {record['title']}",
+                                "description": record["text"][:300]})
+        for query in plan(hypothesis, context, tried, findings)[:QUERIES_PER_ROUND]:
+            if used >= budget:
+                break
+            tried.append(query)
+            used += 1
+            for result in web.search(query):
+                if result["url"] not in seen:
+                    seen.add(result["url"])
+                    results.append(result)
+        for url in choose(hypothesis, results)[:PAGES_PER_ROUND]:
+            if used >= budget:
+                break
+            used += 1
+            text = web.fetch_text(url)
+            if text:
+                title = next((r["title"] for r in results if r["url"] == url), "").removeprefix("[official record] ")
+                findings.extend(read(hypothesis, url, title, text, source_type=known_type.get(url), context=context))
+        if settled(findings) or used >= budget:
+            break
+    return findings
 
 
-async def beat_loop(beat: dict) -> None:
-    async with db.singleton(f"scout:{beat['id']}"):
-        while True:
-            if await db.over_budget():
-                log.warning("spend cap reached; scout %s idle", beat["id"])
-            else:
-                try:
-                    await cycle(beat)
-                except Refused as e:
-                    log.warning("scout refused: %s", e)
-                except Exception:  # noqa: BLE001 - one bad cycle must not kill a 4-hour run
-                    log.exception("scout cycle failed for %s", beat["id"])
-            # Jitter so beats don't fire in lockstep and spike rate limits.
-            await asyncio.sleep(settings.scout_interval_s * random.uniform(0.8, 1.2))
+def settled(findings: list[dict]) -> bool:
+    return any(f["source_type"] in COUNTS_AS_PROOF and f["finding"] in ("supports", "contradicts") for f in findings)
 
 
-async def main() -> None:
-    beats = load_beats()
-    log.info("scouting %d beats in parallel", len(beats))
-    await asyncio.gather(*(beat_loop(b) for b in beats))
+def plan(hypothesis: str, context: str, tried: list[str], findings: list[dict]) -> list[str]:
+    prompt = f"Story context: {context}\n\nHypothesis: {hypothesis}"
+    if tried:
+        prompt += "\n\nAlready searched (write different queries):\n" + "\n".join(f"- {q}" for q in tried)
+    if findings:
+        prompt += "\n\nFound so far:\n" + "\n".join(f"- {f['source_type']}, {f['finding']}: {f['quote'][:200]}" for f in findings)
+    reply = llm.ask_json(PLAN_SYSTEM, prompt, max_tokens=500)
+    return [q.strip() for q in reply.get("queries", []) if isinstance(q, str) and q.strip()]
+
+
+def choose(hypothesis: str, results: list[dict]) -> list[str]:
+    if not results:
+        return []
+    listing = "\n\n".join(f"{r['url']}\n{r['title']}\n{r['description']}" for r in results)
+    reply = llm.ask_json(CHOOSE_SYSTEM, f"Hypothesis: {hypothesis}\n\nSearch results:\n\n{listing}", max_tokens=800)
+    known = {r["url"] for r in results}
+    return [u for u in reply.get("urls", []) if u in known]
+
+
+def read(hypothesis: str, url: str, title: str, text: str, source_type: str | None = None, context: str = "") -> list[dict]:
+    """Quotes from one page that bear on the hypothesis. source_type, if given, overrides the model's."""
+    # Thinking mode: without it the model confuses different problems with the same product (tested on a
+    # power-steering recall vs. a driver-assistance story); it costs ~800 more output tokens per page.
+    reply = llm.ask_json(READ_SYSTEM, f"Story: {context}\nHypothesis: {hypothesis}\n\nPage: {title}\n{url}\n\n"
+                                      f"Page text:\n{text[:MAX_PAGE_CHARS]}", max_tokens=8000, thinking=True)
+    if not reply.get("relevant") or reply.get("same_problem") is False:
+        return []
+    source_type = source_type or source_type_of(url, reply.get("source_type"))
+    findings = []
+    for item in reply.get("quotes", [])[:3]:
+        quote = str(item.get("quote", "")).strip()
+        finding = item.get("finding")
+        if finding in FINDINGS and contains_quote(text, quote):
+            findings.append({"url": url, "title": title, "source_type": source_type, "quote": quote,
+                             "finding": finding, "note": str(item.get("note") or "")})
+    return findings
+
+
+def source_type_of(url: str, claimed: str | None) -> str:
+    """The model's classification, except that social media is always social media."""
+    host = web.host(url)
+    if any(host == h or host.endswith("." + h) for h in SOCIAL_HOSTS):
+        return "social"
+    return claimed if claimed in SOURCE_TYPES else "other"

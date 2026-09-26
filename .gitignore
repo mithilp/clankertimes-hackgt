@@ -6,3 +6,5 @@ venv/
 archive/
 .models/
 .mem0/
+data/
+.pytest_cache/

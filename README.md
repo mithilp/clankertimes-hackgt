@@ -1,49 +1,53 @@
 # AI newsroom — HackGT 13
 
-Agent newsroom: scouts loop for stories, reporters develop them with open-ended tools (web search, fetch, a real browser), a review panel checks them, and a managing editor publishes. Demo is a real four-hour unattended run.
+An autonomous investigative newsroom. It reads public complaint and injury records (NHTSA, FDA, OSHA) and Bluesky posts, pulls out the claims, counts which ones keep coming up, and hands the biggest to a reporter, who sends a scout to test each hypothesis against official records and the web, and then kills, parks or writes the story.
 
-Plan: [ARCHITECTURE.md](ARCHITECTURE.md) · Schema: [db/schema.sql](db/schema.sql)
+Plan: [ARCHITECTURE.md](ARCHITECTURE.md) · Tests: [TEST_PLAN.md](TEST_PLAN.md)
 
-## Layout
+## Setup
 
-| Path | What |
-|---|---|
-| `newsroom/scout.py` | One loop per beat, all beats in parallel; raises and scores leads |
-| `newsroom/editor.py` | Managing editor (singleton): triage, dedupe, promotion, budget appeals, publishing, waking parked stories |
-| `newsroom/reporter.py` | Pool of reporter slots; evidence plan, stopping rules, draft / park / kill |
-| `newsroom/reviewer.py` | Verifier, skeptic, fairness, run in parallel per story |
-| `newsroom/scoring.py` | Lead scoring: model-rated rubric + measured novelty and timeliness |
-| `newsroom/llm.py` | Shared agent loop; logs every tool call's reason |
-| `newsroom/db.py` | Leases, singleton locks, LISTEN/NOTIFY wake-ups |
-| `newsroom/memory.py` | mem0 shared memory + local embeddings |
-| `config/beats.json` | The beats scouts cover |
-
-## Run it on the box
-
-On a Linux VM with Docker installed (2+ vCPU, 4+ GB RAM):
+Needs Python 3.12.
 
 ```bash
-cp .env.example .env   # add ANTHROPIC_API_KEY and BRAVE_API_KEY
-docker compose up -d --build
-sudo systemctl enable docker   # so the newsroom comes back after a reboot
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt      # macOS/Linux: .venv/bin/pip
 ```
 
-Watch it:
+Add your keys to `.env` (see `.env.example` for the names): `DEEPSEEK_API_KEY` and `BRAVE_API_KEY`.
+
+## Run it
 
 ```bash
-docker compose logs -f editor reporter
-docker compose exec db psql -U newsroom -c "select * from counters"
-docker compose exec db psql -U newsroom -c "select created_at, agent, action, reason from agent_events order by id desc limit 30"
+# 1. Data. These spend no tokens:
+python -m newsroom ingest-osha                     #    ~106k workplace severe injuries, 2015 on
+python -m newsroom ingest-faers --since 2026-06-01 --until 2026-06-30   # drug adverse events
+python -m newsroom ingest-caers --since 2025-01-01 --until 2025-12-31   # food/supplement/cosmetic events
+python -m newsroom ingest-investigations           #    NHTSA defect investigations, for the scouts
+# These are read by the model:
+python -m newsroom ingest-nhtsa                    #    ~132k vehicle complaints, 2025-2026
+python -m newsroom ingest-maude --since 2026-08-01 --product-code FRN  # device reports (FRN: infusion pumps)
+python -m newsroom ingest-bluesky                  #    Bluesky posts about product problems, last 30 days
+
+# The easy way: hunt depth-first. It reads one product at a time and investigates each lead as soon
+# as it finds one, so tokens are spent only on what it reaches. Run it again to carry on.
+python -m newsroom hunt --stories 1 --source nhtsa
+
+# Or breadth-first, step by step:
+python -m newsroom claims --limit 500              # 2. read a small batch first to check the cost
+python -m newsroom claims                          #    then the rest
+python -m newsroom count                           # 3. group the claims, count distinct people
+python -m newsroom top --source osha               #    see the biggest claim groups (any source)
+python -m newsroom run                             # 4-8. pick, hypotheses, scouts, verdict, article
+python -m newsroom show 1                          #    the full trail of story 1
+python -m newsroom usage                           #    DeepSeek tokens used so far
 ```
 
-Scale reporters: `docker compose up -d --scale reporter=3`, or set `REPORTER_CONCURRENCY`. How many stories run at once is capped by `MAX_ACTIVE_STORIES`.
+Published articles are written to `published/`. Everything else lives in `data/newsroom.db`.
 
-## Run it locally without Docker
-
-Needs Python 3.12 and a Postgres with pgvector.
+## Tests
 
 ```bash
-pip install -r requirements.txt && playwright install chromium
-export DATABASE_URL=postgresql://newsroom:newsroom@localhost:5432/newsroom
-python -m newsroom all
+.venv/Scripts/python -m pytest
 ```
+
+The previous beat-driven newsroom was removed; see git history (`122ea29`) for it.

@@ -1,73 +1,47 @@
-"""Settings, read once from the environment. Every knob the trial run might tune lives here."""
+"""Settings, read from the environment (and .env) each time they are needed."""
 
 import os
-import socket
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
+from dotenv import load_dotenv
 
-def _int(name: str, default: int) -> int:
-    return int(os.getenv(name, default))
-
-
-def _float(name: str, default: float) -> float:
-    return float(os.getenv(name, default))
-
-
-@dataclass(frozen=True)
-class Models:
-    reporter: str = os.getenv("MODEL_REPORTER", "claude-opus-5")
-    scout: str = os.getenv("MODEL_SCOUT", "claude-sonnet-5")
-    scorer: str = os.getenv("MODEL_SCORER", "claude-sonnet-5")
-    editor: str = os.getenv("MODEL_EDITOR", "claude-sonnet-5")
-    memory: str = os.getenv("MODEL_MEMORY", "claude-haiku-4-5")
-    # Reviewers deliberately span models so their catches aren't correlated.
-    verifier: str = os.getenv("MODEL_VERIFIER", "claude-sonnet-5")
-    skeptic: str = os.getenv("MODEL_SKEPTIC", "claude-opus-5")
-    fairness: str = os.getenv("MODEL_FAIRNESS", "claude-sonnet-5")
-
-
-# $ per million tokens (input, output). Cache reads bill at 10%, writes at 125% of input.
-PRICES = {
-    "claude-opus-5": (5.00, 25.00),
-    "claude-sonnet-5": (2.00, 10.00),
-    "claude-haiku-4-5": (1.00, 5.00),
-}
+load_dotenv()
 
 
 @dataclass(frozen=True)
 class Settings:
-    database_url: str = os.getenv("DATABASE_URL", "postgresql://newsroom:newsroom@localhost:5432/newsroom")
-    brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
-    archive_dir: Path = Path(os.getenv("ARCHIVE_DIR", "./archive"))
-    beats_file: Path = Path(os.getenv("BEATS_FILE", "./config/beats.json"))
-    worker_id: str = os.getenv("WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
-    models: Models = field(default_factory=Models)
-
-    # Parallelism, per process. Scale further by running more replicas.
-    reporter_concurrency: int = _int("REPORTER_CONCURRENCY", 3)
-    reviewer_concurrency: int = _int("REVIEWER_CONCURRENCY", 2)
-
-    # Scouts
-    scout_interval_s: int = _int("SCOUT_INTERVAL_S", 600)
-    scout_max_calls: int = _int("SCOUT_MAX_CALLS", 15)
-
-    # Managing editor
-    promote_threshold: float = _float("PROMOTE_THRESHOLD", 0.55)
-    duplicate_similarity: float = _float("DUPLICATE_SIMILARITY", 0.90)
-    max_active_stories: int = _int("MAX_ACTIVE_STORIES", 6)
-    max_appeals_granted: int = _int("MAX_APPEALS_GRANTED", 1)
-    spend_cap_usd: float = _float("SPEND_CAP_USD", 150.0)
-
-    # Reporter stopping rules
-    base_tool_calls: int = _int("BASE_TOOL_CALLS", 25)      # budget = base + score * extra
-    extra_tool_calls: int = _int("EXTRA_TOOL_CALLS", 35)
-    base_minutes: int = _int("BASE_MINUTES", 15)
-    extra_minutes: int = _int("EXTRA_MINUTES", 30)
-    yield_window: int = _int("YIELD_WINDOW", 8)             # last N source calls with zero new facts
-    lease_seconds: int = _int("LEASE_SECONDS", 180)
-
-    fetch_chars: int = _int("FETCH_CHARS", 12000)           # page text returned per fetch call
+    deepseek_api_key: str | None
+    deepseek_base_url: str
+    fast_model: str          # bulk work: reading complaints, grouping claims, scouts reading pages
+    smart_model: str         # the reporter's judgment and writing
+    brave_api_key: str | None
+    openfda_api_key: str | None
+    courtlistener_token: str | None  # optional: CourtListener search works without one, at a lower rate limit
+    db_path: Path
+    published_dir: Path
+    top_n: int               # claim groups the reporter looks at
+    min_complaints: int      # products with fewer complaints are not read at all
+    min_group: int           # hunt: a claim group needs this many distinct people to be a lead
+    scout_budget: int        # searches plus page reads per scout
+    reporters: int           # stories worked on at once, one per reporter
 
 
-settings = Settings()
+def load() -> Settings:
+    env = os.getenv
+    return Settings(
+        deepseek_api_key=env("DEEPSEEK_API_KEY") or None,
+        deepseek_base_url=env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),
+        fast_model=env("DEEPSEEK_FAST_MODEL", "deepseek-flash"),
+        smart_model=env("DEEPSEEK_SMART_MODEL", "deepseek-v4-pro"),
+        brave_api_key=env("BRAVE_API_KEY") or None,
+        openfda_api_key=env("OPENFDA_API_KEY") or None,
+        courtlistener_token=env("COURTLISTENER_TOKEN") or None,
+        db_path=Path(env("NEWSROOM_DB", "data/newsroom.db")),
+        published_dir=Path(env("NEWSROOM_PUBLISHED", "published")),
+        top_n=int(env("NEWSROOM_TOP_N", "20")),
+        min_complaints=int(env("NEWSROOM_MIN_COMPLAINTS", "10")),
+        min_group=int(env("NEWSROOM_MIN_GROUP", "10")),
+        scout_budget=int(env("NEWSROOM_SCOUT_BUDGET", "30")),
+        reporters=int(env("NEWSROOM_REPORTERS", "3")),
+    )

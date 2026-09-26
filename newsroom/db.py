@@ -1,216 +1,188 @@
-"""Postgres access: pool, leases, singleton locks, LISTEN wake-ups, and the event/trail logs.
+"""SQLite storage: complaints, claims, claim groups, stories, and the log of every decision."""
 
-All coordination between parallel workers goes through here. Two primitives do the work:
+import json
+import sqlite3
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any
 
-- Leases (`claim_story`): any number of workers race for rows with FOR UPDATE SKIP LOCKED.
-  Exactly one wins each row; a crashed worker's lease expires and the row is reclaimed.
-- Advisory locks (`singleton`): exactly one holder per key across all processes. Used for
-  the managing editor and for each scout beat, so extra replicas act as hot standbys.
+from . import config
+
+SCHEMA = """
+create table if not exists complaints (
+  id        text primary key,            -- "nhtsa:<ODINO>" or "maude:<mdr_report_key>"
+  source    text not null,
+  received  text not null,               -- YYYY-MM-DD: when the agency received it
+  product   text not null,
+  company   text,
+  severe    integer not null default 0,  -- injury, fire or death reported
+  text      text not null default '',
+  fields    text not null default '{}'   -- a few structured fields; no personal data
+);
+create index if not exists complaints_product on complaints(product);
+
+create table if not exists claims (
+  complaint_id text primary key references complaints(id),
+  claim        text,                     -- null: the complaint describes no clear problem
+  coded        integer not null default 0  -- 1: taken from the source's own codes, no model involved
+);
+
+create table if not exists investigations (   -- NHTSA defect investigations: reference data for scouts
+  action    text primary key,
+  company   text,
+  component text,
+  opened    text,
+  closed    text,
+  recall    text,
+  subject   text,
+  summary   text
+);
+create table if not exists investigation_vehicles (
+  action text not null,
+  make   text not null,
+  model  text not null,
+  year   text not null,
+  primary key (action, make, model, year)
+);
+
+create table if not exists claim_groups (
+  id       integer primary key,
+  as_of    text not null,
+  source   text not null,
+  product  text not null,
+  company  text,
+  label    text not null,
+  total    integer not null,              -- distinct people
+  last_90  integer not null,
+  severe   integer not null,
+  members  text not null                  -- json: [{"id", "counted", "duplicate_of"}]
+);
+create index if not exists claim_groups_as_of on claim_groups(as_of);
+
+create table if not exists stories (
+  id       integer primary key,
+  created  text not null,
+  source   text not null,
+  product  text not null,
+  company  text,
+  label    text not null,
+  counts   text not null,                 -- json: total, last_90, severe, as_of, group_id
+  status   text not null,                 -- reporting | killed | parked | published | failed
+  angle    text,
+  note     text,
+  article  text                           -- path of the published article
+);
+
+create table if not exists hypotheses (
+  id        integer primary key,
+  story_id  integer not null references stories(id),
+  n         integer not null,
+  statement text not null
+);
+
+create table if not exists findings (
+  id            integer primary key,
+  hypothesis_id integer not null references hypotheses(id),
+  url           text not null,
+  title         text,
+  source_type   text not null,
+  quote         text not null,
+  finding       text not null,            -- supports | contradicts | unclear
+  note          text
+);
+
+create table if not exists events (
+  id       integer primary key,
+  at       text not null,
+  story_id integer,
+  actor    text not null,
+  action   text not null,
+  reason   text not null,
+  detail   text
+);
+
+create table if not exists seen_posts (id text primary key);  -- Bluesky posts already read, stored or not
+
+create table if not exists scanned (      -- products the hunt has finished with, and how big they were then
+  source     text not null,
+  product    text not null,
+  complaints integer not null,
+  at         text not null,
+  primary key (source, product)
+);
+
+create table if not exists reviewed (     -- claim groups the reporter has judged, so none is judged twice
+  source  text not null,
+  product text not null,
+  label   text not null,
+  outcome text not null,                  -- not_worth | already_reported | picked
+  reason  text,
+  at      text not null,
+  primary key (source, product, label)
+);
+create table if not exists llm_cache (key text primary key, response text not null);
+create table if not exists llm_usage (at text not null, model text not null, prompt_tokens integer, completion_tokens integer);
+create table if not exists pages (url text primary key, fetched text not null, text text not null);
 """
 
-import asyncio
-import contextlib
-import hashlib
-import json
-import logging
-from typing import Any, AsyncIterator
-from urllib.parse import urlsplit, urlunsplit
-
-import asyncpg
-
-from .config import PRICES, settings
-
-log = logging.getLogger(__name__)
-_pool: asyncpg.Pool | None = None
+_ready: set[Path] = set()
 
 
-async def _init_conn(conn: asyncpg.Connection) -> None:
-    await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
+def now() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-async def pool() -> asyncpg.Pool:
-    global _pool
-    if _pool is None:
-        _pool = await asyncpg.create_pool(settings.database_url, min_size=1, max_size=10, init=_init_conn)
-    return _pool
+def connect() -> sqlite3.Connection:
+    path = config.load().db_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=60, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    if path.resolve() not in _ready:
+        conn.execute("pragma journal_mode=wal")
+        conn.executescript(SCHEMA)
+        # Databases created before claims had a "coded" column get it added.
+        if "coded" not in {row["name"] for row in conn.execute("pragma table_info(claims)")}:
+            conn.execute("alter table claims add column coded integer not null default 0")
+            conn.commit()
+        _ready.add(path.resolve())
+    return conn
 
 
-# Every lead column except the embedding (fetched rows don't need it).
-LEAD_COLS = ("id, scout, beat, hypothesis, why_now, why_now_at, who_would_know, would_settle_it, score, "
-             "score_components, score_reason, fingerprint, status, duplicate_of, created_at")
-
-
-def vec(embedding: list[float]) -> str:
-    """pgvector text form; pass with a ::vector cast."""
-    return "[" + ",".join(f"{x:.6f}" for x in embedding) + "]"
-
-
-# --- trail -------------------------------------------------------------------------------
-
-
-async def event(agent: str, action: str, reason: str, *, story_id=None, lead_id=None, detail: Any = None) -> None:
-    p = await pool()
-    await p.execute(
-        "insert into agent_events (agent, action, reason, story_id, lead_id, detail) values ($1,$2,$3,$4,$5,$6)",
-        agent, action, reason, story_id, lead_id, detail,
-    )
-    log.info("[%s] %s: %s", agent, action, reason)
-
-
-async def log_tool_call(
-    agent: str, tool: str, reason: str, tool_input: dict, *,
-    story_id=None, lead_id=None, result_summary: str | None = None, source_id=None,
-    duration_ms: int | None = None, billable: bool = True,
-) -> int:
-    p = await pool()
-    return await p.fetchval(
-        """insert into tool_calls (agent, story_id, lead_id, tool, reason, input, result_summary, source_id,
-                                   duration_ms, billable)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id""",
-        agent, story_id, lead_id, tool, reason, tool_input, result_summary, source_id, duration_ms, billable,
-    )
-
-
-def normalize_url(url: str) -> str:
-    parts = urlsplit(url.strip())
-    return urlunsplit((parts.scheme.lower(), parts.netloc.lower(), parts.path.rstrip("/"), parts.query, ""))
-
-
-def url_hash(url: str) -> str:
-    return hashlib.sha256(normalize_url(url).encode()).hexdigest()
-
-
-async def upsert_source(url: str, seen_by: str) -> tuple[Any, bool]:
-    """Returns (source_id, is_new). is_new=False means some agent already touched this URL."""
-    p = await pool()
-    row = await p.fetchrow(
-        """insert into sources (url, url_hash, first_seen_by) values ($1,$2,$3)
-           on conflict (url_hash) do update set url_hash = excluded.url_hash
-           returning id, (xmax = 0) as inserted""",
-        url, url_hash(url), seen_by,
-    )
-    return row["id"], row["inserted"]
-
-
-async def record_usage(agent: str, model: str, usage: Any) -> None:
-    price_in, price_out = PRICES.get(model, PRICES["claude-opus-5"])
-    cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
-    cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
-    cost = (
-        usage.input_tokens * price_in
-        + cache_read * price_in * 0.1
-        + cache_write * price_in * 1.25
-        + usage.output_tokens * price_out
-    ) / 1_000_000
-    p = await pool()
-    await p.execute(
-        """insert into model_usage (agent, model, input_tokens, output_tokens, cache_read, cache_write, cost_usd)
-           values ($1,$2,$3,$4,$5,$6,$7)""",
-        agent, model, usage.input_tokens, usage.output_tokens, cache_read, cache_write, cost,
-    )
-
-
-async def spend_usd() -> float:
-    p = await pool()
-    return float(await p.fetchval("select coalesce(sum(cost_usd), 0) from model_usage"))
-
-
-async def over_budget() -> bool:
-    return await spend_usd() >= settings.spend_cap_usd
-
-
-# --- leases ------------------------------------------------------------------------------
-
-
-async def claim_story(statuses: list[str], new_status: str, owner: str) -> asyncpg.Record | None:
-    """Claim one unleased story in any of `statuses` or `new_status` (the latter = a crashed worker's story).
-
-    Safe under any number of concurrent workers: SKIP LOCKED means each candidate row goes to
-    exactly one claimant, and nobody blocks waiting on a row someone else is claiming.
-    """
-    p = await pool()
-    return await p.fetchrow(
-        f"""
-        update stories s set status = ($2::text)::story_status, lease_owner = $3,
-               lease_expires_at = now() + make_interval(secs => {settings.lease_seconds})
-        where s.id = (
-          select id from stories
-          where (status::text = any($1::text[]) or status::text = $2::text)
-            and (lease_expires_at is null or lease_expires_at < now())
-          order by updated_at
-          for update skip locked
-          limit 1
-        )
-        returning s.*""",
-        statuses, new_status, owner,
-    )
-
-
-async def heartbeat(story_id, owner: str) -> bool:
-    """Extend the lease. False means we lost it (expired and reclaimed) and must stop."""
-    p = await pool()
-    res = await p.execute(
-        f"""update stories set lease_expires_at = now() + make_interval(secs => {settings.lease_seconds})
-            where id = $1 and lease_owner = $2""",
-        story_id, owner,
-    )
-    return res.endswith(" 1")
-
-
-async def release(story_id, owner: str, **fields: Any) -> bool:
-    """Write final fields and drop the lease, only if we still hold it."""
-    p = await pool()
-    cols = list(fields)
-    sets = ", ".join(f"{c} = ${i + 3}" for i, c in enumerate(cols))
-    sets = (sets + ", " if sets else "") + "lease_owner = null, lease_expires_at = null"
-    res = await p.execute(
-        f"update stories set {sets} where id = $1 and lease_owner = $2",
-        story_id, owner, *[fields[c] for c in cols],
-    )
-    return res.endswith(" 1")
-
-
-# --- singletons --------------------------------------------------------------------------
-
-
-@contextlib.asynccontextmanager
-async def singleton(key: str, *, retry_s: float = 15.0) -> AsyncIterator[asyncpg.Connection]:
-    """Block until this process holds the advisory lock for `key`, then hold it for the block.
-
-    The lock lives on a dedicated connection, so if the process dies Postgres releases it
-    and a standby replica takes over within `retry_s`.
-    """
-    conn = await asyncpg.connect(settings.database_url)
+@contextmanager
+def session() -> Iterator[sqlite3.Connection]:
+    conn = connect()
     try:
-        while not await conn.fetchval("select pg_try_advisory_lock(hashtext($1))", key):
-            await asyncio.sleep(retry_s)
-        log.info("acquired singleton %s", key)
         yield conn
+        conn.commit()
     finally:
-        await conn.close()
+        conn.close()
 
 
-# --- wake-ups ----------------------------------------------------------------------------
+def save_complaints(conn: sqlite3.Connection, complaints: Iterable[dict]) -> int:
+    """Insert complaints, skipping ones already stored. Returns how many were new.
+
+    A complaint may arrive with its claim already known ("claim", plus "coded": False if a model wrote it);
+    those claims are stored too, so the claims step skips them.
+    """
+    rows = [{**c, "severe": int(bool(c["severe"])), "fields": json.dumps(c.get("fields", {}))} for c in complaints]
+    new = conn.executemany(
+        "insert or ignore into complaints (id, source, received, product, company, severe, text, fields)"
+        " values (:id, :source, :received, :product, :company, :severe, :text, :fields)",
+        rows,
+    ).rowcount
+    known = [(r["id"], r["claim"], int(r.get("coded", True))) for r in rows if r.get("claim")]
+    if known:
+        conn.executemany("insert or ignore into claims (complaint_id, claim, coded) values (?, ?, ?)", known)
+    conn.commit()
+    return new
 
 
-class Waker:
-    """LISTEN on channels; `wait()` returns on a notification or after `timeout` (poll fallback)."""
-
-    def __init__(self, *channels: str) -> None:
-        self.channels = channels
-        self._event = asyncio.Event()
-        self._conn: asyncpg.Connection | None = None
-
-    async def start(self) -> "Waker":
-        self._conn = await asyncpg.connect(settings.database_url)
-        for ch in self.channels:
-            await self._conn.add_listener(ch, lambda *_: self._event.set())
-        return self
-
-    async def wait(self, timeout: float) -> None:
-        with contextlib.suppress(asyncio.TimeoutError):
-            await asyncio.wait_for(self._event.wait(), timeout)
-        self._event.clear()
-
-    def poke(self) -> None:
-        self._event.set()
+def event(conn: sqlite3.Connection, actor: str, action: str, reason: str, *,
+          story_id: int | None = None, detail: Any = None) -> None:
+    conn.execute(
+        "insert into events (at, story_id, actor, action, reason, detail) values (?, ?, ?, ?, ?, ?)",
+        (now(), story_id, actor, action, reason, json.dumps(detail) if detail is not None else None),
+    )
+    conn.commit()

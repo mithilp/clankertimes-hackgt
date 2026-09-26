@@ -1,235 +1,249 @@
-# Architecture — AI newsroom (HackGT 13)
+# Architecture — AI Investigative Newsroom
 
-An agent newsroom that runs on a loop, finds its own stories, reports them with open-ended tools, and publishes. The demo is a real run: the system has been going for four hours unattended, and here is what it found, what it killed, and what it published.
+The newsroom reads public complaint and injury records and Bluesky posts, pulls out the claims, counts which claims keep coming up, and hands the biggest ones to a reporter. The reporter writes the hypotheses that would have to be true, sends one scout per hypothesis to research them in official records and on the web, and then kills, parks or writes the story based on what the scouts find.
 
 ---
 
-## 1. The loop
+## The pipeline
 
-```
-SCOUTS (several, each with a beat, fire every ~10-15 min, flash leads immediately)
-   look for something worth reporting -> score it -> write a lead
-        |  INSERT lead -> pg_notify('new_lead')   (milliseconds, not a poll cycle)
-        v
-MANAGING EDITOR  triage: dedupe (fingerprint + embedding), promote or hold
-        |  promoted
-        v
-REPORTER (one per story, open-ended tools, runs until resolved or out of budget)
-   - what's already reported, and by whom
-   - what is NOT reported  <- the gap list drives everything after this
-   - goes wherever the story needs: web, browser, public discourse, official
-     records, filings, company sites
-   - drafts with a citation on every claim
-        |
-        v
-REVIEW PANEL  verifier / skeptic / fairness. Any block -> back to reporter once
-        |  all approve
-        v
-MANAGING EDITOR  publish, write the timeline
-        |
-        v
-DASHBOARD  live activity feed, lead queue with scores, handoffs, kill memos,
-           reviewer blocks, published stories, counters   <- what we show judges
-
-SHARED MEMORY (mem0) — beat notes, kill-memo lessons, source reliability,
-                       editorial precedent. Read/written by every agent.
-```
-
-## 2. Principle: no source whitelist
-
-We do not hand agents a list of approved websites. They get instructions about what good reporting requires and open access: internet and a real browser. The agent decides what this particular story needs to check, whether that's a county permit portal, a Reddit thread, a company's own site, or a filing.
-
-**The judgment about where to look is the product.** Anyone can wire up five fixed APIs.
-
-Consequence: we log the agent's stated *reason* for every tool call, not just the call. The persuasive artifact is the trail — "checked X, found nothing, went to Y, then pulled Z" — because without it a judge sees a black box with an article at the end.
-
-Phone and email are out of scope. Every story must be settleable from public records and published material.
-
-## 3. Scouts
-
-Each scout owns a beat and loops. Per cycle it looks around, then writes any candidate lead with a score and a justification. Leads below the threshold stay visible in the queue (good demo material: the system visibly making choices). A scout that finds something strong mid-cycle writes it immediately (a flash lead) rather than waiting for the cycle to end.
-
-A lead is not a topic. It must be a **falsifiable hypothesis** with the fields below, or it isn't a lead yet:
-
-```
-hypothesis:       "The county paid Vendor X $2.1M with no competitive bid"
-why_now:          what surfaced it
-who_would_know:   purchasing office, losing bidders
-would_settle_it:  the contract file, bid tabulation, commission minutes
-sources_seen:     urls already looked at
-score:            0-1, computed from components (below)
+```text
+1. DATA         public complaint and injury records, plus Bluesky posts
+       |
+       v
+2. CLAIMS       coded records: taken from their codes (no tokens)
+                free text: a model reads each one and pulls out the claim
+       |
+       v
+3. COUNT        same claim about the same product, counted by distinct people
+       |
+       v
+4. PICK         the reporter looks at the most-reported claims and picks one
+       |
+       v
+5. HYPOTHESES   the reporter writes what would have to be true
+       |
+       +-----------+-----------+
+       v           v           v
+6. SCOUTS       one per hypothesis: official records first (recalls, investigations,
+       |        lawsuits), then the Brave Search API
+       |        each reports: supports / contradicts / unclear, with quotes
+       +-----------+-----------+
+       v
+7. VERDICT      contradicted -> KILL    not enough -> PARK    supported -> WRITE
+       |
+       v
+8. ARTICLE      every sentence cites a source, then publish
 ```
 
-Why this matters: a topic can never be exhausted, so a reporter handed a topic either quits early or digs forever. A hypothesis has three terminal states — **confirmed**, **killed**, **unresolved**.
+---
 
-Beat notes live in shared memory (mem0) so scouts don't rediscover the same thing, and hypotheses are fingerprinted in Postgres so killed ones don't come back.
+## 1. Data
 
-### Scoring a lead
+Every source is free, and none needs an API key.
 
-The model never emits a single holistic number; LLMs are badly calibrated at that. It rates components against anchored rubrics, each with a one-line reason, and code combines them. Parts that can be measured are measured, not asked.
-
-**Hard gates** (fail any → not promoted, score 0, reason logged):
-- A required field is missing or vague ("look into the budget").
-- `would_settle_it` depends only on non-public evidence (a person, a phone call, a sealed record).
-- The hypothesis alleges wrongdoing by a named private individual.
-
-**Components** (each 0–1):
-
-| Component | Who scores it | 0.2 looks like | 0.9 looks like |
+| Source | What it has | Claims come from | Size |
 |---|---|---|---|
-| `impact` — public money, people affected, officials involved | model | a restaurant changed its hours | $2M no-bid contract, county commission |
-| `settleability` — is the settling evidence public, specific, reachable in hours | model | "internal emails would show it" | named portal + document type + date range |
-| `novelty` — not already covered, not a near-duplicate of a past lead | code: prior-coverage search hits + max embedding similarity to existing leads + mem0 kill lessons | three outlets ran it yesterday | no coverage, nothing similar in `leads` |
-| `tip_strength` — quality of what surfaced it | model, informed by mem0 source-reliability notes | anonymous forum post | official record showing an anomaly |
-| `timeliness` — how recent `why_now` is | code: age of the triggering item | months old | today |
+| **NHTSA vehicle complaints** | Owner complaints: make, model, year, component, crash/fire/injury/death flags, the owner's own description | The model reads them | ~132,000 for 2025-2026 |
+| **FDA MAUDE** (openFDA) | Medical device problem reports: device, manufacturer, death/injury/malfunction, description | The model reads them | Hundreds of thousands a month: fetched by date and device type |
+| **FDA FAERS** (openFDA) | Drug adverse-event reports: suspect drug, maker, reactions in standard medical terms | Their codes: **no tokens** | ~100,000 a month; serious reports only by default |
+| **FDA CAERS** (openFDA) | Adverse events from foods, supplements and cosmetics: product, reactions, outcomes | Their codes: **no tokens** | ~6,000 a year |
+| **OSHA Severe Injury Reports** | Workplace hospitalizations, amputations and eye losses: employer, what happened, a description | Their codes: **no tokens** | ~106,000 since 2015 (federal-OSHA states only) |
+| **Bluesky** | Public posts, searched for product problems ("caught fire", "recall", "stalled while driving"...) | The model reads them and keeps only posts reporting a problem with a specific product | Whatever the searches return |
 
-**Combine** with a weighted geometric mean so a near-zero anywhere drags the whole lead down:
+Every complaint is stored with its source, ID, date, product (for OSHA, the employer), company, whether it reports serious harm, and its text. Personal details are never stored: no complainant cities, dealers or names from NHTSA, no addresses from OSHA, and no Bluesky handles (only a one-way hash of the account, to count distinct people).
 
+In FAERS and CAERS, one report lists several reactions, so each reaction is stored as its own complaint, all tied to the same report so it's never counted twice.
+
+Not included:
+- **CFPB complaints:** they no longer publish complaint text.
+- **CPSC SaferProducts incident reports:** these need a free API key. They're easy to add once we register.
+- **NASA ASRS aviation reports:** these can only be exported by hand from a web page.
+
+---
+
+## 2. Claims
+
+**Coded sources spend no tokens.** FAERS and CAERS reactions and OSHA's injury codes already say what happened, so the claim is taken straight from the codes: "pancreatitis", or "amputation: caught in running powered equipment".
+
+**Free-text sources are read by a model.** For NHTSA and MAUDE, product, company and severity come straight from the data, and a model reads each complaint and writes down its claim as one plain sentence:
+
+```text
+product      "2006 CHEVROLET COBALT"            from the data
+company      "General Motors LLC"               from the data
+claim        "engine shuts off while driving"   written by the model
 ```
-score = impact^0.30 · settleability^0.30 · novelty^0.20 · tip_strength^0.10 · timeliness^0.10
+
+Complaints are read in batches of 25 from one product at a time, so the same problem gets the same wording. Products with fewer than 10 complaints are skipped: they can't produce a big claim group, and skipping them saves most of the cost.
+
+Bluesky posts are read as they're collected: the model finds the product, the maker and the claim, and posts that don't report a problem with a specific product are dropped. Every post read is remembered, so none is paid for twice.
+
+---
+
+## 3. Count
+
+Complaints that make the same claim about the same product are grouped together. "Engine shut off while driving" and "car died on the highway" are the same claim.
+
+Each group is counted by **distinct people**, so repeats don't inflate it:
+
+- the same complaint listed under several parts counts once
+- the same report, or the same Bluesky account, counts once
+- copy-pasted text counts once, even with small edits. Only texts of 12 words or more are compared: short ones like "brakes failed" match by chance.
+
+Coded claims are grouped by their exact label, with no model call. Free-text claims are grouped by a model, since "engine shut off while driving" and "car died on the highway" are worded differently.
+
+(NHTSA only publishes the first 11 characters of a VIN, which identify the model and factory, not the car, so the VIN can't be used to spot repeats.)
+
+The output is a list of claim groups, sorted by count, each showing its total count and its count in the last 90 days. The total catches problems that build slowly over years; the last-90-days count catches ones that suddenly spike.
+
+---
+
+## 4. Pick
+
+The reporter looks at the top 20 claim groups and picks the one most worth a story:
+
+- people are hurt or at risk
+- a company or agency is responsible for fixing it
+- one Brave search shows it hasn't already been reported
+
+Every pick and every skip is logged with a one-line reason.
+
+---
+
+## 5. Hypotheses
+
+One reporter works on one story at a time. The reporter writes 3-5 hypotheses: plain statements that would all have to be true for the story to hold. Each must be checkable on the public web. The complaint counts are already known from the data, so they are never hypotheses.
+
+Example, for pump complaints:
+
+```text
+H1  The pump has not been recalled for delivering the whole bag at once.
+H2  The FDA has been told about the problem, through reports or an inspection.
+H3  The manufacturer has acknowledged the problem somewhere public.
 ```
 
-Settleability is weighted as heavily as impact on purpose: a huge story we can't resolve in four hours burns budget and produces nothing to show.
+---
 
-**Promotion** is threshold + capacity: a lead is promoted when `score >= threshold` *and* a reporter slot is free; otherwise the highest-scoring waiting lead goes next. The initial threshold (~0.55) comes from a trial run. Each rubric prompt carries three or four scored example leads as anchors, and components are stored per lead (`score_components`) so we can see after the trial run which component actually predicted published-vs-killed and re-weight.
+## 6. Scouts
 
-The score also sizes the reporter's starting budget (§4c).
+Each hypothesis gets one scout, with a budget of about 30 searches and page reads.
 
-## 4. Reporter
+**Official records first.** Before the scouts start, the reporter looks up official records for the story directly from government and court databases. These lookups need no web search and no tokens:
 
-Runs until the hypothesis resolves or budget runs out. Sequence:
-
-1. **Evidence plan first.** Before reporting, it writes the ranked list of sources that *could* settle the hypothesis. This is what "done" gets measured against.
-2. **Prior coverage.** What's already been reported and by whom. Cited, credited, never rewritten as ours.
-3. **The gap.** What nobody has established. Everything after this points at the gap.
-4. **Go get it.** Open tools. Records and datasets, the browser for things a fetch can't read, public discourse for leads. Shared memory for hints about where to look.
-5. **Draft.** Every claim carries the source it came from and the exact span it came from.
-
-### When to stop, and when to keep digging
-
-The hard part. Three mechanisms, all cheap to build:
-
-**a. Plan coverage, not effort.** Stop when every high-value item in the evidence plan has been checked and none of them moved the hypothesis. That's the difference between "I got tired" and "I looked at the things that would have answered this."
-
-**b. Marginal yield.** Log every *new* fact that bears on the hypothesis, tied to the tool call that produced it. If the last N sources produced zero new facts, we're in diminishing returns. This is the empirical version of "have I looked hard enough," it beats a timer, and it graphs well on the dashboard.
-
-**c. Budget with an appeal.** Each story gets a tool-call and wall-clock budget sized by the lead's score. When it runs out the reporter can request an extension, but must state what specifically it would check next and why that could change the outcome. The managing editor grants or denies. Dedication where it's earned, rabbit holes cut off. (Judges love watching an agent ask for more time and get told no.)
-
-### Three kinds of "nothing," which need different responses
-
-| Situation | Response |
-|---|---|
-| No public evidence exists yet | **Park it**, don't kill it. Set a wake condition: a filing appears, a meeting agenda posts, a watched page changes |
-| Evidence exists but is gated behind a person or an office | **Park it** with a note naming who holds the evidence. We don't contact people this weekend |
-| Evidence checked and contradicts the hypothesis | **Kill it.** Sometimes the contradiction is itself the story |
-
-### Kill memo
-
-Every dead story gets one paragraph: what was checked, what was found, what would change its mind. Cheap to write, feeds shared memory so scouts don't re-raise it, and showing five killed stories with reasoning is what separates this from every "AI writes articles" project in the room.
-
-## 5. Editors
-
-### Managing editor (one)
-
-Coordination must have a single owner; several editors deciding in parallel means races and double-assigned stories.
-
-- Wakes on `new_lead` notifications. Dedupes by exact fingerprint and embedding similarity, then promotes or holds.
-- Blocks two reporters working the same hypothesis (enforced in the database too — see §6).
-- Grants or denies budget appeals.
-- Publishes, and writes the story's agent timeline.
-
-Mostly code plus one model call per decision, not a full agent.
-
-### Review panel (three, at publish time)
-
-Reviewers differ by **job**, not by political persona. Persona prompts on one model produce correlated, performative disagreement; distinct jobs produce real catches.
-
-- **Verifier** — does each claim's quoted span actually support the claim? Sets `claims.verified`.
-- **Skeptic** — tries to kill the story: alternative explanations, missing context, weaker reading of the same records.
-- **Fairness** — who is affected, is their side present in the record, is the named-person rule followed.
-
-Run reviewers on different models where possible for genuine diversity.
-
-**Rule:** any reviewer can block with a written reason. The story goes back to the reporter once, with a half budget top-up; a second block kills it, with the reviewers' reasons as the kill memo.
-
-**Guardrail:** no allegations about named private individuals. Named officials and organizations are allowed, phrased strictly as what the records show. Four hours of unattended publishing with real names is the one way this becomes a problem instead of a win.
-
-## 6. Data model
-
-Full DDL: [`db/schema.sql`](db/schema.sql).
-
-- `sources` — every URL touched; url hash for cross-agent dedupe, archive snapshot, content hash for wake conditions
-- `leads` — hypothesis fields, `score` + `score_components`, `fingerprint` (unique), `embedding` (pgvector), status
-- `lead_sources` — which sources surfaced a lead
-- `stories` — one per lead (`lead_id unique`), status, resolution, kill memo, wake condition, review round
-- `evidence_plan` — ranked items and their checked status (stopping rule a)
-- `tool_calls` — every call with its **reason** (the trail)
-- `facts` — new facts tied to the tool call that produced them (stopping rule b)
-- `claims` — published sentences, source, quoted span, verified flag
-- `budgets`, `budget_appeals` — stopping rule c
-- `reviews` — panel verdicts per round and role
-- `agent_events` — curated dashboard feed
-- `counters` — view for the dashboard
-
-Coordination state lives in Postgres because it needs exact, immediate answers. Workers claim stories with a lease (`FOR UPDATE SKIP LOCKED`, `lease_owner`, `lease_expires_at`), so a race has exactly one winner and a dead worker's story is resumed by another. Triggers fire `pg_notify` on new leads, appeals and story status changes, so the next worker wakes within milliseconds; every worker also polls every 10�30s, so a missed notification costs seconds, not a stuck pipeline. Citations are checked mechanically: every fetched page's text is archived, and a draft is rejected unless each claim's quoted span appears verbatim in the archived text of its source.
-
-### Shared memory (mem0)
-
-What goes in mem0: beat notes, kill-memo lessons, source reliability ("Fulton permit portal needs the browser"), editorial precedent. Scoped by `agent_id` for per-agent notes plus a shared newsroom namespace.
-
-What does not: dedupe, locks, handoffs (mem0 is LLM-extracted and similarity-searched, so it's approximate and lags writes by seconds). Memory is also **never evidence**. Memories are stored as hints about where to look; every published claim still needs a source URL and quoted span. Memory reads are logged as `tool_calls` (`tool = 'mem0.search'`) so the trail shows when an agent acted on something it remembered.
-
-## 7. Stack
-
-| Layer | Choice |
-|---|---|
-| Workers | Python 3.12, asyncio. One package (`newsroom/`), one Docker image, role picked at start: `python -m newsroom scout\|editor\|reporter\|reviewer` |
-| Agent loop | Anthropic Python SDK, manual tool loop (`newsroom/llm.py`). Every tool requires a `reason`, which is logged before the tool runs |
-| Models | Opus 5 reporter and skeptic (with server-side refusal fallback), Sonnet 5 scouts, scorer, editor, verifier and fairness reviewers, Haiku 4.5 for mem0's memory extraction |
-| State | Postgres 17 + pgvector, in the box (Docker) |
-| Shared memory | mem0 open source, self-hosted: pgvector store in the same Postgres, local fastembed embeddings |
-| Embeddings | fastembed `BAAI/bge-small-en-v1.5` (384 dims), run locally on CPU and baked into the image |
-| Web search | Brave Search API (web + news) |
-| Browser | Playwright Chromium, running locally in the image |
-| Archive | Extracted page text on a Docker volume; quoted spans are checked against it |
-| Site + dashboard | Next.js, polling `agent_events` and the `counters` view (not built yet) |
-| Runtime | One VM running `docker compose up -d`. Everything restarts on crash and on reboot |
-
-"Offline" here means unattended, with nobody's laptop involved. The box still needs outbound internet for the Claude API, search, and the sites reporters visit.
-
-### Processes and parallelism
-
-| Role | Parallel? | How |
+| Record | Looked up by | Used for |
 |---|---|---|
-| Scouts | Yes, every beat at once | One asyncio task per beat. Each beat holds an advisory lock, so a second replica is a hot standby per beat, never a duplicate |
-| Managing editor | No, one on purpose | Advisory-lock singleton. A second replica waits and takes over within ~15s if the first dies |
-| Reporters | Yes | `replicas � REPORTER_CONCURRENCY` slots, each working one story under a lease. Parallel tool calls within one turn also run concurrently |
-| Reviewers | Yes, two levels | `replicas � REVIEWER_CONCURRENCY` stories at once; the three reviewers of one story run concurrently |
+| NHTSA recalls | make, model, year | vehicle stories |
+| NHTSA defect investigations | make, model, year (from NHTSA's investigations file, loaded once) | vehicle stories |
+| FDA device recalls | FDA product code | medical device stories |
+| FDA drug and food enforcement (recalls) | product name | drug, food and supplement stories |
+| CPSC recalls | product name | Bluesky stories about consumer products |
+| Federal lawsuits (CourtListener) | company name and the problem | every story with a company |
 
-The number of stories in flight is capped by the editor (`MAX_ACTIVE_STORIES`), not by how many reporter slots exist. A global `SPEND_CAP_USD`, checked against `model_usage`, stops promotions, scouting and new reporting once reached.
+Each scout sees these records alongside its search results and reads the ones that bear on its hypothesis. Then it researches with the **Brave Search API** and reads the pages it finds.
 
-## 8. Demo
+The scout reports back a list of sources:
 
-Run for four hours untouched before judging. On screen:
+```text
+url
+quote        the exact sentence from the page
+finding      supports / contradicts / unclear
+```
 
-1. **Live activity feed** — agents working, with their stated reasons.
-2. **Lead queue** — scores and their components, what got promoted, what didn't.
-3. **Published stories** — every sentence's citation clickable to the source.
-4. **Kill memos** — what it refused to report and why.
-5. **Reviewer blocks** — the skeptic stopping a draft, with its reason.
-6. **Counters** — sources checked, leads raised, stories published, killed, parked, reviewer blocks, appeals denied.
+Every quote is checked in code against the page text.
 
-Freeze code before the run starts. Keep an earlier run's database as a backup demo. Set a hard spend cap across model, search, and browser APIs.
+What counts as proof:
 
-## 9. Legal and safety notes for the weekend
+- **Counts:** government records, court records, and news outlets' own reporting.
+- **Doesn't count:** a company denial doesn't prove a claim false, and complaints or social posts don't prove it true. They are the claim itself.
+- A lawsuit shows that someone **alleged** something. It can prove that a lawsuit was filed, not that the allegation is true.
 
-- No contacting people: no email, no phone.
-- No CAPTCHA bypassing. Use official APIs and bulk data first.
-- No allegations about named private individuals. Officials and organizations: records-only phrasing.
+---
 
-## 10. Open questions
+## 7. Verdict
 
-- Scout cadence and how many beats at once.
-- Score threshold and component weights, which we'll only learn from a trial run.
-- Which "public discourse" surfaces are reachable cheaply enough to be useful in 24 hours.
-- Embedding similarity cutoff for near-duplicate leads.
+The reporter reads the scouts' findings and decides:
+
+```text
+a hypothesis is clearly contradicted by a source that counts   -> KILL, with a short note why
+every hypothesis is supported by a source that counts          -> WRITE
+anything else                                                  -> PARK, and try again later
+```
+
+A wrong detail isn't a kill. If a source shows the date was June 5, not June 3, the reporter corrects the hypothesis and carries on.
+
+---
+
+## 8. Article
+
+The reporter writes the story:
+
+- what the complaints show, described as complaints ("owners report..."), never as proven fact
+- what the scouts confirmed, with sources
+- the company's side, if it has said anything publicly
+- what is still unknown
+
+Before publishing, code checks that every sentence cites a source and every quote appears in its source. No private individual is named. Then it publishes.
+
+---
+
+## Hunt mode: depth-first
+
+Reading every complaint before looking for stories wastes tokens on products that never produce one. The **hunt** works depth-first instead:
+
+```text
+next product (most serious complaints first, taking turns between sources)
+    -> read only its complaints (steps 2-3)
+    -> any claim reported by 10+ people that the reporter hasn't judged yet?
+         no  -> next product
+         yes -> reporter judges it (step 4)
+                  lead -> investigate it right away (steps 5-8), then continue
+                  no   -> next product
+stop after N investigations, or M products
+```
+
+- Tokens are spent only on the products the hunt reaches.
+- Every product scanned and every claim the reporter judged is remembered, so the next hunt carries on where the last one stopped.
+- A product is scanned again only if it gains new complaints.
+- Unidentified products (NHTSA's "UNKNOWN" make) are skipped.
+
+The breadth-first commands (`claims`, `count`, `leads`, `run`) still work for looking at everything at once.
+
+---
+
+## Demo
+
+The dashboard shows the whole trail for a story: complaints read, claims found, the counts, why the reporter picked this one (and skipped others), the hypotheses, what each scout found, the verdict, and the article. Kills and parks are shown too.
+
+---
+
+## Settings
+
+| Setting | Value |
+|---|---|
+| Reporters | 3, each on one story at a time |
+| Claim groups the reporter looks at | Top 20 |
+| Hypotheses per story | 3-5 |
+| Scout budget | About 30 searches and page reads |
+| Minimum complaints for a product to be read | 10 |
+| Minimum people behind a claim for the hunt to call it a lead | 10 |
+
+All of these can be changed in `.env` (see `.env.example`).
+
+---
+
+## Tech
+
+- **Python 3.12**, run from the command line (`python -m newsroom ...`)
+- **SQLite** for everything: complaints, claims, groups, stories, and the log of every decision
+- **DeepSeek**, through its OpenAI-compatible API: `deepseek-flash` for bulk work (reading complaints, grouping claims, scouts reading pages) and `deepseek-v4-pro` for the reporter's judgment and writing. Replies are cached, so rerunning a step costs nothing.
+- **Brave Search API** for the scouts and the "already reported?" check
+- **Free public APIs and files** for everything else: NHTSA, openFDA, OSHA, CPSC, CourtListener and Bluesky. None needs a key. An openFDA key only raises its page size and rate limit, and a CourtListener token only raises its rate limit.
+
+---
+
+## Not in v1
+
+Kept out on purpose, to keep v1 simple. Each can be added later if we need it.
+
+- CPSC SaferProducts incident reports (need a free API key), NASA ASRS (no API)
+- automatic re-checking of parked stories
+- statistics that compare products against similar products
