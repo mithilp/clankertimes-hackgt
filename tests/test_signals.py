@@ -10,7 +10,7 @@ import uuid
 
 import pytest
 
-from newsroom.signals import InMemorySignals, Signal, origin_key
+from newsroom.signals import FileSignals, InMemorySignals, Signal, origin_key
 
 ASTRA = os.getenv("NEWSROOM_TEST_ASTRA") == "1"
 
@@ -23,11 +23,13 @@ def astra_store():
     store.database.drop_collection(store.name)
 
 
-@pytest.fixture(params=["memory", pytest.param("astra", marks=pytest.mark.skipif(
+@pytest.fixture(params=["memory", "file", pytest.param("astra", marks=pytest.mark.skipif(
     not ASTRA, reason="set NEWSROOM_TEST_ASTRA=1 to run against Astra DB"))])
-def store(request):
+def store(request, tmp_path):
     if request.param == "memory":
         return InMemorySignals()
+    if request.param == "file":
+        return FileSignals(tmp_path / "signals.json")
     astra = request.getfixturevalue("astra_store")
     astra.collection.delete_many({})    # every test starts from an empty store
     return astra
@@ -120,3 +122,14 @@ def test_origin_key_merges_other_addresses_for_the_same_post():
     tweet = origin_key("https://x.com/someone/status/42")
     assert tweet == origin_key("https://twitter.com/i/status/42?s=20") == "x.com/i/status/42"
     assert origin_key("https://old.reddit.com/r/x/comments/abc/t/") == origin_key("https://www.reddit.com/r/x/comments/abc/t")
+
+
+def test_file_store_survives_a_restart(tmp_path):
+    path = tmp_path / "signals.json"
+    first = FileSignals(path)
+    sid, _ = first.add(signal())
+    first.mark_used(sid, "hyp-9")
+    again = FileSignals(path)
+    assert again.get(sid).used_by == ["hyp-9"]
+    _, created = again.add(signal())          # still deduplicates against what was loaded
+    assert not created

@@ -6,9 +6,11 @@ verdicts, events, the LLM cache, fetched page text) stays in SQLite in newsroom/
     Bossman  --add()-->  signals store  --recent() / similar()-->  McLovin
                                         <--mark_used()-- McLovin, when a signal feeds a hypothesis
 
-Two implementations share this contract:
-  * InMemorySignals, below: the reference implementation, used by the tests and for offline runs
-    (NEWSROOM_SIGNALS=memory). Similarity is word overlap, not embeddings.
+Three implementations share this contract:
+  * InMemorySignals, below: the reference implementation, used by the tests
+    (NEWSROOM_SIGNALS=memory). Similarity is word overlap, not embeddings. Forgets on exit.
+  * FileSignals, below: InMemorySignals saved to a JSON file (NEWSROOM_SIGNALS=file, the default
+    when Astra isn't configured), so agents run as separate commands can hand off to each other.
   * AstraSignals, in newsroom/signals_astra.py: DataStax Astra DB with real vector search.
     It must pass tests/test_signals.py (run them against it with NEWSROOM_TEST_ASTRA=1).
 
@@ -17,11 +19,13 @@ A signal is one Bossman item. The fields mirror agents/bossman/playbook.md.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Protocol
 from urllib.parse import parse_qsl, urlencode, urlparse
 
@@ -177,19 +181,63 @@ class InMemorySignals:
         signal.status, signal.ignored_reason = "ignored", reason
 
 
+class FileSignals(InMemorySignals):
+    """InMemorySignals persisted to one JSON file after every write. For local runs, not production."""
+
+    def __init__(self, path: str | os.PathLike) -> None:
+        super().__init__()
+        self.path = Path(path)
+        if self.path.exists():
+            for row in json.loads(self.path.read_text(encoding="utf-8")):
+                signal = Signal(**row)
+                self._by_id[signal.id] = signal
+
+    def _save(self) -> None:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = self.path.with_suffix(".tmp")
+        tmp.write_text(json.dumps([s.to_dict() for s in self._by_id.values()], indent=1), encoding="utf-8")
+        tmp.replace(self.path)
+
+    def add(self, signal: Signal) -> tuple[str, bool]:
+        result = super().add(signal)
+        self._save()
+        return result
+
+    def mark_used(self, signal_id: str, hypothesis_id: str) -> None:
+        super().mark_used(signal_id, hypothesis_id)
+        self._save()
+
+    def mark_ignored(self, signal_id: str, reason: str) -> None:
+        super().mark_ignored(signal_id, reason)
+        self._save()
+
+
 _store: SignalStore | None = None
 
 
+def _astra_configured() -> bool:
+    return bool(os.getenv("ASTRA_DB_ID") or os.getenv("ASTRA_DB_API_ENDPOINT"))
+
+
 def get_store() -> SignalStore:
-    """Astra DB when it's configured; the in-memory store only when asked for explicitly."""
+    """Which store to use, from NEWSROOM_SIGNALS:
+      astra   Astra DB (the default whenever ASTRA_DB_ID or ASTRA_DB_API_ENDPOINT is set)
+      file    a local JSON file at NEWSROOM_SIGNALS_FILE (the default otherwise)
+      memory  in-process only; forgotten on exit (tests)
+    """
     global _store
     if _store is None:
-        if os.getenv("NEWSROOM_SIGNALS", "astra").lower() == "memory":
+        mode = os.getenv("NEWSROOM_SIGNALS", "").lower() or ("astra" if _astra_configured() else "file")
+        if mode == "memory":
             _store = InMemorySignals()
-        else:
-            if not (os.getenv("ASTRA_DB_ID") or os.getenv("ASTRA_DB_API_ENDPOINT")):
-                raise RuntimeError("ASTRA_DB_ID is not set. Configure Astra DB in .env, "
-                                   "or set NEWSROOM_SIGNALS=memory for an offline run.")
+        elif mode == "file":
+            _store = FileSignals(os.getenv("NEWSROOM_SIGNALS_FILE", "runs/signals.json"))
+        elif mode == "astra":
+            if not _astra_configured():
+                raise RuntimeError("NEWSROOM_SIGNALS=astra but neither ASTRA_DB_ID nor ASTRA_DB_API_ENDPOINT "
+                                   "is set in .env.")
             from .signals_astra import AstraSignals
             _store = AstraSignals()
+        else:
+            raise RuntimeError(f"NEWSROOM_SIGNALS={mode!r}: use astra, file or memory")
     return _store

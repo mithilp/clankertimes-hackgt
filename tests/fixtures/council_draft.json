@@ -1,0 +1,73 @@
+{
+ "_note": "Test fixture abridged from published/0003 (Tesla Model 3 steering). Source texts are shortened excerpts so quotes can be checked; not a publishable article. Known issue kept on purpose for the judges: the owner complaints (Autopilot/FSD) and the recall/probe (power-steering assist) are different defects.",
+ "article": {
+  "headline": "Tesla Model 3 owners report steering failures as NHTSA widens its investigation",
+  "paragraphs": [
+   [
+    {
+     "text": "Fifteen owners of the 2023 Tesla Model 3 have reported to NHTSA that Autopilot or Full Self-Driving failed to steer or control the car properly, according to the agency's complaint database.",
+     "cite": [
+      "D"
+     ]
+    },
+    {
+     "text": "One owner wrote that \"full self driving is very dangerous\" and described the car \"going to the wrong lane.\"",
+     "cite": [
+      "D"
+     ]
+    }
+   ],
+   [
+    {
+     "text": "In February 2025, Tesla recalled certain 2023 Model 3 vehicles for a loss of power steering assist.",
+     "cite": [
+      "F1"
+     ]
+    },
+    {
+     "text": "The recall filing says the circuit board for the power steering assist \"may experience an overstress condition, causing a loss of power steering assist when the vehicle reaches a stop and then accelerates again.\"",
+     "cite": [
+      "F1"
+     ]
+    },
+    {
+     "text": "Tesla said it was \"not aware of any crashes, injuries or deaths related to the condition.\"",
+     "cite": [
+      "F1"
+     ]
+    }
+   ],
+   [
+    {
+     "text": "NHTSA opened a preliminary evaluation in July 2023 into 2023 Model 3 and Model Y vehicles over reports of loss of steering control, when it had 12 complaints.",
+     "cite": [
+      "F2"
+     ]
+    },
+    {
+     "text": "The agency upgraded the probe to an engineering analysis in May 2024, by which time it had received 115 reports.",
+     "cite": [
+      "F2"
+     ]
+    }
+   ]
+  ]
+ },
+ "sources": {
+  "D": {
+   "title": "NHTSA vehicle complaints database: 15 people reporting Autopilot/FSD steering failures for the 2023 Tesla Model 3, through 2026-09-01",
+   "url": "https://www.nhtsa.gov/nhtsa-datasets-and-apis",
+   "text": "full self driving is very dangerous, going to the wrong lane and changing lanes that almost hit a car.\nran a red light on two separate occasions while in full self driving mode.\nsuddenly turned towards the left onto railroad tracks in the rain."
+  },
+  "F1": {
+   "title": "NHTSA recall: Tesla 2023 Model 3 loss of power steering assist, February 2025 (excerpt)",
+   "url": "https://www.nhtsa.gov/recalls",
+   "text": "In February 2025, Tesla, Inc. recalled certain 2023 Model 3 vehicles. The printed circuit board for the electronic power steering assist may experience an overstress condition, causing a loss of power steering assist when the vehicle reaches a stop and then accelerates again. A loss of power steering assist can require greater steering effort, especially at low speeds, increasing the risk of a crash. Tesla is not aware of any crashes, injuries or deaths related to the condition."
+  },
+  "F2": {
+   "title": "NHTSA Office of Defects Investigation: steering investigation, 2023 Model 3 / Model Y (excerpt)",
+   "url": "https://www.nhtsa.gov/",
+   "text": "NHTSA opened a preliminary evaluation in July 2023 into 2023 Model 3 and Model Y vehicles due to reports of inability to steer the vehicle and the loss of power steering. At that time the agency had received twelve complaints. The investigation was upgraded to an engineering analysis in May 2024; NHTSA had received 115 reports of loss of steering control."
+  }
+ }
+}

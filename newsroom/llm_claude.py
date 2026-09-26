@@ -46,7 +46,11 @@ def ask_json(system: str, user: str, *, model: str, max_tokens: int = 4000, thin
     with db.session() as conn:
         row = conn.execute("select response from llm_cache where key = ?", (key,)).fetchone()
     if row:
-        return json.loads(row["response"])
+        try:
+            return json.loads(row["response"])
+        except json.JSONDecodeError:
+            # Rows written before replies were normalised may still hold fences or chatter.
+            return json.loads(_only_json(row["response"]))
 
     prompt = user + "\n\nReply with one JSON object and nothing else: no prose, no code fences."
     argv = [
@@ -84,8 +88,9 @@ def ask_json(system: str, user: str, *, model: str, max_tokens: int = 4000, thin
                 prompt = user + "\n\nYour previous reply was not valid JSON. Reply with one JSON object only."
                 continue
         if isinstance(data, dict):
-            with db.session() as conn:
-                conn.execute("insert or replace into llm_cache (key, response) values (?, ?)", (key, text))
+            with db.session() as conn:   # cache the parsed object, never the raw reply
+                conn.execute("insert or replace into llm_cache (key, response) values (?, ?)",
+                             (key, json.dumps(data, ensure_ascii=False)))
             return data
         last = text
     raise ClaudeCodeError(f"{model} did not return a JSON object after 3 attempts: {last[:200]}")
