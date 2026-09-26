@@ -116,3 +116,16 @@ def test_leads_from_the_newsroom_db_are_offered_first(env, monkeypatch):
     monkeypatch.setattr(llm, "ask_json", model)
     scout_agent.run(TASK, budget=2, leads=[{"url": "https://reddit.com/r/x/1", "title": "owners post", "description": "d"}])
     assert "R1 [lead from the newsroom DB] owners post" in model.prompts[0]
+
+
+def test_a_coverage_scout_reads_pages_against_every_element_not_the_narrow_hypothesis():
+    from newsroom import scout_agent
+    elements = [{"id": "E1", "claim": "A fatal robotaxi crash happened in Austin"},
+                {"id": "E2", "claim": "NHTSA's crash data lists it"}]
+    cov = scout_agent.Scout({"id": "coverage", "mode": "coverage", "statement": "NHTSA data lists the Austin crash",
+                             "elements": elements}, budget=3)
+    text = cov._reading_statement()
+    assert "any part of this story" in text and "E1: A fatal robotaxi crash happened in Austin" in text
+    plain = scout_agent.Scout({"id": "H1", "statement": "NHTSA data lists the Austin crash",
+                               "assignment": {}}, budget=3)
+    assert plain._reading_statement() == "NHTSA data lists the Austin crash"

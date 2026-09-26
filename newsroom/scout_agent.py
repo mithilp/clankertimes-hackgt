@@ -245,12 +245,23 @@ class Scout:
         title = (hit or {}).get("title", "")
         for prefix in ("[official record] ", "[Federal Register] ", "[lead from the newsroom DB] ", "[signal] "):
             title = title.removeprefix(prefix)
-        found = read_page(self.statement, url, title, text, source_type=self.known_type.get(url), context=self.context)
+        found = read_page(self._reading_statement(), url, title, text, source_type=self.known_type.get(url),
+                          context=self.context)
         self.findings.extend(found)
         if not found:
             return "nothing on this page bears on the statement"
         return f"{len(found)} verified quote(s):\n      " + "\n      ".join(
             f"[{f['finding']}] {f['source_type']}: \"{f['quote'][:220]}\"" for f in found)
+
+    def _reading_statement(self) -> str:
+        """What a page is read against. A coverage scout asks whether the page already reports ANY part of the
+        story, not whether it proves the whole (narrow) hypothesis: an article about the crash is prior
+        coverage of the crash even if it never mentions the federal filing the story is about."""
+        elements = self.task.get("elements") or []
+        if self.mode != "coverage" or not elements:
+            return self.statement
+        return ("Earlier reporting of any part of this story. The page supports this if it reports any one of: "
+                + " | ".join(f"{e.get('id', '')}: {e.get('claim', '')}" for e in elements))
 
     # --- the loop -------------------------------------------------------------------------------
     def _tools_text(self) -> str:
