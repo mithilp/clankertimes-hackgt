@@ -33,7 +33,11 @@ def _get_client() -> OpenAI:
 def ask_json(system: str, user: str, *, model: str | None = None, max_tokens: int = 4000,
              thinking: bool = False) -> dict:
     """Ask the model and parse its JSON reply. The prompt must mention JSON (DeepSeek's JSON mode requires it)."""
-    model = model or config.load().fast_model
+    settings = config.load()
+    model = model or settings.fast_model
+    if settings.llm_provider == "claude_code":
+        from . import llm_claude
+        return llm_claude.ask_json(system, user, model=model, max_tokens=max_tokens, thinking=thinking)
     key = hashlib.sha256(json.dumps([model, system, user, max_tokens, thinking]).encode()).hexdigest()
     with db.session() as conn:
         row = conn.execute("select response from llm_cache where key = ?", (key,)).fetchone()

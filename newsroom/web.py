@@ -19,6 +19,10 @@ class SearchError(RuntimeError):
 
 
 def search(query: str, count: int = 10) -> list[dict]:
+    """Brave by default; NEWSROOM_SEARCH_BACKEND=browser searches with a local headless browser instead."""
+    if config.load().search_backend == "browser":
+        from . import browser
+        return browser.search(query, count)
     key = config.load().brave_api_key
     if not key:
         raise SearchError("BRAVE_API_KEY is not set: add it to .env")
@@ -37,6 +41,18 @@ def fetch_text(url: str) -> str:
         row = conn.execute("select text from pages where url = ?", (url,)).fetchone()
     if row:
         return row["text"]
+    if config.load().search_backend == "browser":
+        # The browser renders JS and gets past plain-HTTP blocks; fall through to httpx if it fails.
+        from . import browser
+        try:
+            text = browser.fetch_text(url)
+            if text:
+                remember(url, text)
+                return text
+        except browser.Blocked:
+            return ""
+        except browser.BrowserError:
+            pass
     try:
         response = httpx.get(url, headers=HEADERS, timeout=30, follow_redirects=True)
         response.raise_for_status()
