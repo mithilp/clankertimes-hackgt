@@ -17,12 +17,20 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
 import threading
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 from datetime import datetime, timezone
+from pathlib import Path
+
+try:
+    import fcntl                     # macOS and Linux: a lock shared by every process on the machine
+except ImportError:                  # Windows: threads in one process still share the schedule
+    fcntl = None
 
 import httpx
 
@@ -109,32 +117,78 @@ def bluesky_trending(limit: int = 20) -> list[dict]:
 
 
 _ATOM = {"a": "http://www.w3.org/2005/Atom"}
+# Reddit limits unauthenticated feed requests per IP, so every Bossman on this machine shares one
+# schedule, kept in runs/reddit/: at most one request every REDDIT_GAP seconds across all processes; after
+# a 429, everyone pauses Reddit (5 minutes, doubling if it happens again soon after, up to an hour); and a
+# subreddit fetched in the last REDDIT_CACHE seconds is reused instead of fetched again.
+REDDIT_DIR = Path("runs") / "reddit"
+REDDIT_GAP = float(os.getenv("NEWSROOM_REDDIT_GAP", "6"))
+REDDIT_CACHE = 300
 _reddit_lock = threading.Lock()
-_reddit_last = [0.0]
 
 
-def _reddit_get(url: str, **params) -> httpx.Response:
-    """Reddit rate-limits unauthenticated feed requests: at most one every 3 seconds from any thread,
-    and on a 429, wait as long as it asks (or 10s, then 20s) and try again."""
-    with _reddit_lock:
-        for attempt in range(3):
-            wait = 3 - (time.monotonic() - _reddit_last[0])
-            if wait > 0:
-                time.sleep(wait)
-            try:
-                return _get(url, **params)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code != 429 or attempt == 2:
-                    raise
-                retry_after = e.response.headers.get("retry-after", "")
-                time.sleep(min(float(retry_after), 30) if retry_after.replace(".", "", 1).isdigit() else 10 * (attempt + 1))
-            finally:
-                _reddit_last[0] = time.monotonic()
-        raise RuntimeError("unreachable")
+class RedditPaused(RuntimeError):
+    """Reddit rate-limited this machine recently; its calls are skipped until the pause ends."""
+
+
+@contextmanager
+def _machine_lock():
+    """Held by one process on this machine at a time (and, via _reddit_lock, one thread)."""
+    REDDIT_DIR.mkdir(parents=True, exist_ok=True)
+    with _reddit_lock, open(REDDIT_DIR / "lock", "w") as handle:
+        if fcntl:
+            fcntl.flock(handle, fcntl.LOCK_EX)
+        yield
+
+
+def _reddit_state() -> dict:
+    try:
+        return json.loads((REDDIT_DIR / "state.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _reddit_fetch(sub: str, sort: str, limit: int) -> bytes:
+    cache = REDDIT_DIR / "cache" / f"{sub.lower()}_{sort}_{limit}.xml"
+
+    def cached() -> bytes | None:
+        fresh = cache.exists() and time.time() - cache.stat().st_mtime < REDDIT_CACHE
+        return cache.read_bytes() if fresh else None
+
+    if (hit := cached()) is not None:
+        return hit
+    with _machine_lock():
+        if (hit := cached()) is not None:              # another process fetched it while we waited
+            return hit
+        state = _reddit_state()
+        if state.get("paused_until", 0) > time.time():
+            until = datetime.fromtimestamp(state["paused_until"]).astimezone()
+            raise RedditPaused(f"skipped: Reddit is paused until {until:%H:%M %Z} after a rate limit")
+        wait = state.get("last", 0) + REDDIT_GAP - time.time()
+        if wait > 0:
+            time.sleep(wait)
+        try:
+            response = _get(f"https://www.reddit.com/r/{sub}/{sort}/.rss", limit=limit)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 429:
+                raise
+            recent = time.time() - state.get("paused_until", 0) < 1800
+            pause = min(state.get("pause", 300) * 2, 3600) if recent else 300
+            retry_after = e.response.headers.get("retry-after", "")
+            if retry_after.replace(".", "", 1).isdigit():
+                pause = max(pause, min(float(retry_after), 3600))
+            state.update(paused_until=time.time() + pause, pause=pause, last=time.time())
+            (REDDIT_DIR / "state.json").write_text(json.dumps(state), encoding="utf-8")
+            raise RedditPaused(f"skipped: Reddit rate-limited us; pausing Reddit for {pause / 60:g} minutes") from e
+        state["last"] = time.time()
+        (REDDIT_DIR / "state.json").write_text(json.dumps(state), encoding="utf-8")
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_bytes(response.content)
+        return response.content
 
 
 def _subreddit_feed(sub: str, sort: str, limit: int) -> list[dict]:
-    root = ET.fromstring(_reddit_get(f"https://www.reddit.com/r/{sub}/{sort}/.rss", limit=limit).content)
+    root = ET.fromstring(_reddit_fetch(sub, sort, limit))
     out = []
     for rank, entry in enumerate(root.findall("a:entry", _ATOM), 1):
         title = entry.findtext("a:title", default="", namespaces=_ATOM)

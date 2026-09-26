@@ -70,3 +70,31 @@ def test_browser_search_rejects_results_for_some_other_query():
     assert _matches_query('"Georgia Tech Research Institute" contract', real)
     assert not _matches_query("site:nique.net housing", [{"title": "AITAH", "url": "https://reddit.com/r/AITAH", "description": ""}])
     assert _matches_query("site:nique.net housing", [{"title": "Housing lottery", "url": "https://www.nique.net/news/1", "description": ""}])
+
+
+def test_reddit_pauses_for_everyone_after_a_rate_limit_and_reuses_recent_fetches(monkeypatch, tmp_path):
+    import httpx
+    import pytest
+    from newsroom import gather
+    monkeypatch.setattr(gather, "REDDIT_DIR", tmp_path / "reddit")
+    monkeypatch.setattr(gather, "REDDIT_GAP", 0)
+    feed = b'<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Water main break</title></entry></feed>'
+    calls = []
+
+    def fake_get(url, **params):
+        calls.append(url)
+        if "ratelimited" in url:
+            request = httpx.Request("GET", url)
+            raise httpx.HTTPStatusError("429", request=request, response=httpx.Response(429, request=request))
+        return httpx.Response(200, content=feed, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(gather, "_get", fake_get)
+    assert gather.subreddit("Atlanta")[0]["title"] == "Water main break"
+    assert gather.subreddit("atlanta")[0]["title"] == "Water main break"
+    assert len(calls) == 1                                    # the second read came from the shared cache
+
+    with pytest.raises(gather.RedditPaused):
+        gather.subreddit("ratelimited")
+    with pytest.raises(gather.RedditPaused, match="paused until"):
+        gather.subreddit("gatech")                            # a different subreddit is skipped too
+    assert len(calls) == 2                                    # ...without another request
