@@ -414,16 +414,25 @@ def _strs(value) -> list[str]:
     return [str(x).strip() for x in value if str(x).strip()] if isinstance(value, list) else []
 
 
+COVERAGE_QUERIES = """
+# Your job right now: find earlier reporting
+
+Write three short news searches (3 to 7 words each, no quotes, no operators) that would find earlier
+reporting on this story if it exists: the institution plus the event, the way a headline would say it.
+
+Reply with JSON only: {"queries": ["...", "...", "..."]}
+"""
+
+
 class CoverageUnknown(RuntimeError):
     """The coverage scout couldn't run a single search, so whether the story is already reported is unknown."""
 
 
 def coverage_checked(trail: list[dict]) -> bool:
-    """True when at least one search for prior coverage actually ran (a news or web search that wasn't
-    unavailable or failed). Zero results from a search that ran is a real answer; a search that never ran
-    is not."""
-    return any(t.get("tool") in ("news_search", "web_search")
-               and not str(t.get("result", "")).startswith((scout_agent.UNAVAILABLE, "failed"))
+    """True when at least one search for prior coverage returned results. A search that never ran, failed,
+    or came back empty doesn't count: an empty result is more often a bad query (a whole sentence, say)
+    than proof that nobody reported the story, and publishing an already-reported story is the worse error."""
+    return any(t.get("tool") in ("news_search", "web_search") and re.match(r"[1-9]\d* ", str(t.get("result", "")))
                for t in trail)
 
 
@@ -541,7 +550,7 @@ class Investigation:
         # Prior coverage is legwork too: a coverage scout finds it, and the reporter reads its report.
         self.say("coverage scout out: what has already been reported?")
         task = {"id": "coverage", "mode": "coverage", "statement": self.frame.get("restated") or self.h["hypothesis"],
-                "searches": _strs(self.frame.get("coverage_searches"))[:3],
+                "searches": self.coverage_queries(),
                 "elements": [{"id": e["id"], "claim": e["claim"]} for e in self.frame["elements"]]}
         try:
             self.coverage = scout_agent.run(task, budget=max(MIN_BUDGET, self.budget // 2), context=self._context(),
@@ -556,7 +565,7 @@ class Investigation:
             # The scout can't be trusted to pick the search (it may spend its budget re-reading leads), so the
             # reporter runs the news searches itself, then sends the scout to read and judge what they found.
             from .gather import news_search
-            queries = _strs(self.frame.get("coverage_searches"))[:3] or [task["statement"][:120]]
+            queries = task["searches"]
             ran, hits = [], []
             for q in queries:
                 try:
@@ -597,6 +606,15 @@ class Investigation:
         self.say(f"  coverage scout: {cov.get('status', 'unknown')}; {len(found)} prior report(s)"
                  + (f"; already published: {', '.join(sorted(reported))}" if reported else "") + f". {cov.get('summary', '')}")
         self._plan()
+
+    def coverage_queries(self) -> list[str]:
+        """Short searches for earlier reporting: the plan's, or three written for the purpose. Never the whole
+        hypothesis as one query, which news search answers with nothing."""
+        queries = [q for q in _strs(self.frame.get("coverage_searches")) if 0 < len(q.split()) <= 10][:3]
+        if not queries:
+            reply = self.ask(COVERAGE_QUERIES, brief(self.h), max_tokens=400)
+            queries = [q for q in _strs(reply.get("queries")) if 0 < len(q.split()) <= 10][:3]
+        return queries or [" ".join(self.h["hypothesis"].split()[:8])]
 
     def _context(self) -> str:
         return str(self.frame.get("context") or self.h["accountable_party"] or "")

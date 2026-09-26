@@ -582,6 +582,8 @@ def test_a_story_whose_coverage_could_not_be_checked_is_not_written(env, monkeyp
     with pytest.raises(reporter_agent.CoverageUnknown):
         run(write=True)
     assert reporter_agent.coverage_checked([SEARCHED]) and not reporter_agent.coverage_checked([])
+    # A search that ran but found nothing (often a bad query) doesn't count as checking.
+    assert not reporter_agent.coverage_checked([{**SEARCHED, "result": "0 news results"}])
 
 
 def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(env, monkeypatch):
