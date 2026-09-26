@@ -87,6 +87,12 @@ class _Browser:
             except Exception as e:  # noqa: BLE001 - playwright raises its own Error type
                 # A PDF or other file starts a download instead of a page; the plain-HTTP reader handles those.
                 raise BrowserError(f"could not open {url} in the browser: {str(e)[:120]}") from e
+            if urllib.parse.urlparse(url).hostname == "news.google.com":
+                # Google News links are a script redirect to the publisher: wait until we get there.
+                try:
+                    page.wait_for_url(re.compile(r"^(?!https?://news\.google\.com)"), timeout=20_000)
+                except Exception as e:  # noqa: BLE001
+                    raise BrowserError(f"Google News link never reached the publisher: {url}") from e
             if wait_for:
                 page.wait_for_selector(wait_for, timeout=15_000)
             # A page that is mid-redirect refuses content(); settle, then retry once or twice.

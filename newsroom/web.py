@@ -71,6 +71,8 @@ def fetch_text(url: str) -> str:
         response.raise_for_status()
     except httpx.HTTPError:
         return ""
+    if urlparse(str(response.url)).hostname == "news.google.com":
+        return ""        # still Google's redirect page, not the article: only the browser can follow it
     is_pdf = "pdf" in response.headers.get("content-type", "") or url.lower().endswith(".pdf")
     text = (_pdf_text(response.content) if is_pdf else _html_text(response.text))[:MAX_TEXT]
     if text:
