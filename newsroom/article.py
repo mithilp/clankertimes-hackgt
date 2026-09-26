@@ -1,4 +1,8 @@
-"""Step 8: check that every sentence is cited and every quote is real, then publish as Markdown."""
+"""Step 8: check that every sentence is cited and every quote is real, then publish as Markdown.
+
+The gates below are mechanical, not editorial: each one blocks a way real newsrooms have
+published something false, and none of them needs a model call.
+"""
 
 import re
 from datetime import date
@@ -7,6 +11,33 @@ from pathlib import Path
 from .text import contains_quote
 
 QUOTED = re.compile(r'["“]([^"”]{10,})["”]')
+
+# Text that means the pipeline leaked into the copy. Gannett printed "[[WINNING_TEAM_MASCOT]]",
+# and in 2026 the Telegraph, Bristol Live and Marie Claire each shipped a prompt or an AI note.
+LEAKAGE = re.compile(
+    r"\[\[[^\]]+\]\]|\{\{|\bTODO\b|\bundefined\b|\bnull\b|```"
+    r"|as an AI|I cannot|I\'m sorry|here(?:\'s| is) the (?:JSON|article|revised)|^certainly[,!]",
+    re.I | re.M,
+)
+
+# An office is the charging party, never the defendant, in its own records. Hoodline published
+# "San Mateo County DA charged with murder" because a parser made the office the subject.
+OFFICE = (r"(?:district attorney|attorney general|prosecutor\'s office|sheriff\'s office|police department"
+          r"|office of [a-z ]+|department of [a-z ]+|the (?:FDA|NHTSA|OSHA|CPSC|EPA|DOJ)|commission|agency|administration)")
+CRIMINAL_VERB = (r"(?:was |were |is |are |has been |have been )?(?:charged with|indicted|convicted of|arrested"
+                 r"|pleaded guilty|sentenced to|found guilty)")
+OFFICE_AS_DEFENDANT = re.compile(rf"\b{OFFICE}\b[^.]{{0,40}}?\b{CRIMINAL_VERB}\b", re.I)
+
+# Words that impute a crime. They need a record, not complaint data, behind them.
+CRIMINAL_LABEL = re.compile(
+    r"\b(?:fraud(?:ulent|ulently)?|black market|kickback|launder(?:ing|ed)|embezzl\w+|bribe\w*|scheme to"
+    r"|cover(?:ed)? up|illegal(?:ly)?|criminal(?:ly)?)\b", re.I)
+
+# The data is current through a date. Present-tense absolutes outrun it.
+TIMELESS = re.compile(r"\b(?:as of today|as of now|currently|right now|to date|so far this year)\b", re.I)
+
+# Counts are known exactly, so vague quantifiers are a choice to be less accurate.
+VAGUE_COUNT = re.compile(r"\b(?:many|numerous|several|countless|dozens of|scores of|a number of)\b", re.I)
 
 
 def check(article: dict, sources: dict[str, dict]) -> list[str]:
@@ -36,7 +67,38 @@ def check(article: dict, sources: dict[str, dict]) -> list[str]:
                 for quote in QUOTED.findall(text):
                     if not any(contains_quote(sources[c]["text"], quote) for c in cites):
                         problems.append(f'{where}: quote not found in its sources: "{quote}"')
+            problems += _sentence_gates(where, text, cites)
+    problems += _leakage(article)
     return problems
+
+
+def _sentence_gates(where: str, text: str, cites: list) -> list[str]:
+    """Checks that hold for any sentence, regardless of which sources it cites."""
+    problems = []
+    if match := OFFICE_AS_DEFENDANT.search(text):
+        problems.append(f"{where}: makes an agency or office the subject of a criminal verb "
+                        f"(\"{match.group(0).strip()}\"). An office charges; it is not the accused. "
+                        "Name the person charged, or rewrite.")
+    if TIMELESS.search(text):
+        problems.append(f"{where}: says what is true now, but the data only runs through its cutoff date. "
+                        "Date-scope the claim instead.")
+    # Complaint data ("D") is the allegation itself; it cannot establish a crime or a count-free adjective.
+    if cites and set(map(str, cites)) == {"D"}:
+        if match := CRIMINAL_LABEL.search(text):
+            problems.append(f"{where}: uses \"{match.group(0)}\" while citing only the complaint data. "
+                            "A crime needs a government record, court record or news report.")
+        if match := VAGUE_COUNT.search(text):
+            problems.append(f"{where}: says \"{match.group(0)}\" when the exact count is known. Use the number.")
+    return problems
+
+
+def _leakage(article: dict) -> list[str]:
+    """Template syntax, prompt echoes and refusal boilerplate anywhere in the draft."""
+    blob = str(article.get("headline", "")) + "\n" + "\n".join(
+        str(sentence.get("text", ""))
+        for paragraph in article.get("paragraphs") or [] for sentence in paragraph
+    )
+    return [f'pipeline text left in the draft: "{m.group(0).strip()}"' for m in [LEAKAGE.search(blob)] if m]
 
 
 def render(article: dict, sources: dict[str, dict], published: date) -> str:

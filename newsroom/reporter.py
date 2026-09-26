@@ -41,8 +41,21 @@ Sources:
 
 Rules:
 - Every sentence cites at least one source id.
-- Describe complaints as complaints ("owners reported..."), never as proven fact.
+- Describe complaints as complaints ("owners reported..."), never as proven fact. A complaint record is
+  an allegation someone made, not an established defect; a report of harm is not proof of cause.
 - State as fact only what a government record, court record or news report supports.
+- Match your wording to the evidence you hold. This is the ladder, strongest first:
+    two independent records agree -> state it plainly;
+    one record -> "records show ..." or "according to <the record>";
+    an official finding that is not final -> "alleged", and never upgrade a charge to a conviction;
+    an act established but not intent -> drop the intent verb ("did not follow the rule", not "ignored the rule");
+    a pattern but not a cause -> state the pattern and say the cause is not established.
+- Use the exact term a record uses. A verdict, charge or audit finding is what its own document calls it,
+  never a heavier synonym ("errors" is not "fraud"; "sexual abuse" is not "rape").
+- An agency or office is the party that charges, inspects or fines. It is never the accused in its own record.
+- Give the number, not an adjective: "15 owners", not "many owners".
+- The complaint counts run through a cutoff date, which is in source D's title. Say "through <that date>",
+  never "currently", "as of today" or "to date".
 - Include the company's public response if a finding has one. Never write that the company "did not respond" or "declined to comment": nobody asked it.
 - If a source contradicts part of the story, say so.
 - Connect a source to the complaints only if it is about the same problem, not a different defect of the same product.
