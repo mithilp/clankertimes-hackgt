@@ -12,7 +12,7 @@ Three implementations share this contract:
   * FileSignals, below: InMemorySignals saved to a JSON file (NEWSROOM_SIGNALS=file, the default
     when Astra isn't configured), so agents run as separate commands can hand off to each other.
   * AstraSignals, in newsroom/signals_astra.py: DataStax Astra DB with real vector search.
-    Not written yet; see docs/prompts/astra-db.md. It must pass tests/test_signals.py.
+    It must pass tests/test_signals.py (run them against it with NEWSROOM_TEST_ASTRA=1).
 
 A signal is one Bossman item. The fields mirror agents/bossman/playbook.md.
 """
@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 # Two signals whose text overlaps this much, about the same accountable party, are one signal.
 MERGE_SIMILARITY = float(os.getenv("NEWSROOM_SIGNAL_MERGE", "0.8"))
@@ -64,13 +64,37 @@ class Signal:
         return asdict(self)
 
 
+# Query parameters that only say how someone arrived at a page (plus any utm*). Every other parameter is
+# kept, because on many sites it is what identifies the page: youtube.com/watch?v=, nhtsa.gov/recalls?nhtsaId=.
+TRACKING_PARAMS = {"fbclid", "gclid", "dclid", "msclkid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src",
+                   "ref_url", "si", "s", "t", "feature", "share_id", "smid", "cmpid"}
+# Other hostnames for the same site.
+HOST_ALIASES = {"twitter.com": "x.com", "mobile.twitter.com": "x.com", "mobile.x.com": "x.com",
+                "old.reddit.com": "reddit.com", "new.reddit.com": "reddit.com", "np.reddit.com": "reddit.com",
+                "m.reddit.com": "reddit.com", "m.youtube.com": "youtube.com", "m.facebook.com": "facebook.com"}
+
+
 def origin_key(origin: str) -> str:
-    """Normalise an origin so reposts of the same thing collide: host + path, lowercased, no query."""
-    o = origin.strip().lower()
-    if o.startswith(("http://", "https://")):
-        u = urlparse(o)
-        return f"{(u.hostname or '').removeprefix('www.')}{u.path.rstrip('/')}"
-    return re.sub(r"\s+", " ", o)
+    """Normalise an origin so reposts of the same thing collide and different things don't: host without
+    www or mobile aliases, lowercased path, and only the query parameters that identify the page."""
+    o = origin.strip()
+    if not o.lower().startswith(("http://", "https://")):
+        return re.sub(r"\s+", " ", o.lower())
+    u = urlparse(o)
+    host = (u.hostname or "").removeprefix("www.")
+    host = HOST_ALIASES.get(host, host)
+    path = u.path.rstrip("/")
+    query = sorted((k, v) for k, v in parse_qsl(u.query) if not k.lower().startswith("utm")
+                   and k.lower() not in TRACKING_PARAMS)
+    if host == "youtu.be" or (host == "youtube.com" and path.startswith("/shorts/")):
+        # Video ids are case-sensitive, so they go in the query, which isn't lowercased.
+        host, path, query = "youtube.com", "/watch", [("v", path.rsplit("/", 1)[-1])]
+    elif host == "youtube.com" and path == "/watch":
+        query = [(k, v) for k, v in query if k == "v"]   # drop playlist position and the like
+    elif host == "x.com" and (m := re.fullmatch(r"/[^/]+/status/(\d+)", path)):
+        path = f"/i/status/{m[1]}"                        # the post, not the account that posted it
+    key = f"{host}{path.lower()}"
+    return f"{key}?{urlencode(query)}" if query else key
 
 
 class SignalStore(Protocol):
@@ -191,23 +215,28 @@ class FileSignals(InMemorySignals):
 _store: SignalStore | None = None
 
 
+def _astra_configured() -> bool:
+    return bool(os.getenv("ASTRA_DB_ID") or os.getenv("ASTRA_DB_API_ENDPOINT"))
+
+
 def get_store() -> SignalStore:
     """Which store to use, from NEWSROOM_SIGNALS:
-      astra   Astra DB (the default whenever ASTRA_DB_API_ENDPOINT is set)
+      astra   Astra DB (the default whenever ASTRA_DB_ID or ASTRA_DB_API_ENDPOINT is set)
       file    a local JSON file at NEWSROOM_SIGNALS_FILE (the default otherwise)
       memory  in-process only; forgotten on exit (tests)
     """
     global _store
     if _store is None:
-        mode = os.getenv("NEWSROOM_SIGNALS", "").lower() or ("astra" if os.getenv("ASTRA_DB_API_ENDPOINT") else "file")
+        mode = os.getenv("NEWSROOM_SIGNALS", "").lower() or ("astra" if _astra_configured() else "file")
         if mode == "memory":
             _store = InMemorySignals()
         elif mode == "file":
             _store = FileSignals(os.getenv("NEWSROOM_SIGNALS_FILE", "runs/signals.json"))
         elif mode == "astra":
-            if not os.getenv("ASTRA_DB_API_ENDPOINT"):
-                raise RuntimeError("NEWSROOM_SIGNALS=astra but ASTRA_DB_API_ENDPOINT is not set in .env.")
-            from .signals_astra import AstraSignals   # written against docs/prompts/astra-db.md
+            if not _astra_configured():
+                raise RuntimeError("NEWSROOM_SIGNALS=astra but neither ASTRA_DB_ID nor ASTRA_DB_API_ENDPOINT "
+                                   "is set in .env.")
+            from .signals_astra import AstraSignals
             _store = AstraSignals()
         else:
             raise RuntimeError(f"NEWSROOM_SIGNALS={mode!r}: use astra, file or memory")

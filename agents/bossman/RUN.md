@@ -76,7 +76,7 @@ In `runs/bossman/<timestamp>/`:
 
 ## Where signals go
 
-`NEWSROOM_SIGNALS` picks the store: `astra` (Astra DB, the default once `ASTRA_DB_API_ENDPOINT` is set), `file` (`runs/signals.json`, the default otherwise), or `memory`. Delete `runs/signals.json` to start fresh.
+`NEWSROOM_SIGNALS` picks the store: `astra` (Astra DB, the default once `ASTRA_DB_ID` or `ASTRA_DB_API_ENDPOINT` is set), `file` (`runs/signals.json`, the default otherwise), or `memory`. Delete `runs/signals.json` to start fresh.
 
 ## Judging a run
 
