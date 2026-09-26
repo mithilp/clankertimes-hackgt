@@ -553,18 +553,35 @@ class Investigation:
         if not coverage_checked(self.coverage.get("trail", [])):
             # Web search is often paused (DuckDuckGo bot checks). Google News doesn't depend on it: send the
             # coverage scout out once more with news search, reading and the newsroom's DB only.
-            self.say("  coverage scout: no search ran; going out again with news search only")
+            # The scout can't be trusted to pick the search (it may spend its budget re-reading leads), so the
+            # reporter runs the news searches itself, then sends the scout to read and judge what they found.
+            from .gather import news_search
+            queries = _strs(self.frame.get("coverage_searches"))[:3] or [task["statement"][:120]]
+            ran, hits = [], []
+            for q in queries:
+                try:
+                    found = news_search(q if "when:" in q else f"{q} when:365d", limit=8)
+                    ran.append({"tool": "news_search", "arg": q, "why": "prior coverage (run by the reporter)",
+                                "result": f"{len(found)} news results"})
+                    hits += [{"url": c["url"], "title": c["title"], "description": c["snippet"]} for c in found]
+                except Exception as e:  # noqa: BLE001 - recorded; coverage stays unknown if every one fails
+                    ran.append({"tool": "news_search", "arg": q, "why": "prior coverage (run by the reporter)",
+                                "result": f"failed: {type(e).__name__}: {e}"[:200]})
+            self.say(f"  coverage: web search down; the reporter ran {len(queries)} news search(es) itself, "
+                     f"{len(hits)} results for the scout to read")
             first = self.coverage
-            try:
-                again = scout_agent.run({**task, "tools": ["news_search", "read", "db_signals"]},
-                                        budget=max(MIN_BUDGET, self.budget // 2), context=self._context(),
-                                        leads=self.leads, say=self.say)
-                self.coverage = {**again, "trail": first.get("trail", []) + again.get("trail", []),
-                                 "findings": first.get("findings", []) + again.get("findings", [])}
-            except web.SearchError:
-                raise
-            except Exception as e:  # noqa: BLE001 - still unknown; the check below stops the story
-                self.say(f"  coverage scout failed again: {type(e).__name__}: {e}")
+            again = {"findings": [], "trail": [], "report": first.get("report", {})}
+            if hits:
+                try:
+                    again = scout_agent.run({**task, "tools": ["read", "news_search"]},
+                                            budget=max(MIN_BUDGET, self.budget // 2), context=self._context(),
+                                            leads=hits, say=self.say)
+                except web.SearchError:
+                    raise
+                except Exception as e:  # noqa: BLE001 - the searches ran; the scout's reading just failed
+                    self.say(f"  coverage scout failed reading: {type(e).__name__}: {e}")
+            self.coverage = {**again, "trail": first.get("trail", []) + ran + again.get("trail", []),
+                             "findings": first.get("findings", []) + again.get("findings", [])}
         if not coverage_checked(self.coverage.get("trail", [])):
             # "Nothing found" only means something if we could look. Never publish a story whose prior
             # coverage nobody could check: stop, and let the pipeline retry it when search is back.

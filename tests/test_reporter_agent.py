@@ -574,6 +574,11 @@ def test_a_story_whose_coverage_could_not_be_checked_is_not_written(env, monkeyp
                               {"tool": "web_search", "arg": "y", "why": "", "result": "failed: ConnectError: offline"}]}
         raise AssertionError("no reporting scout should be sent when coverage is unknown")
     monkeypatch.setattr(reporter_agent.scout_agent, "run", run_scout)
+    from newsroom import gather
+
+    def news_down(q, limit=8):
+        raise ConnectionError("offline")
+    monkeypatch.setattr(gather, "news_search", news_down)       # Google News down too: nothing could look
     with pytest.raises(reporter_agent.CoverageUnknown):
         run(write=True)
     assert reporter_agent.coverage_checked([SEARCHED]) and not reporter_agent.coverage_checked([])
@@ -594,5 +599,10 @@ def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(
             return {"findings": [], "report": {"coverage": [], "status": "new"}, "trail": [SEARCHED]}
         return real(task, **kw)
     monkeypatch.setattr(reporter_agent.scout_agent, "run", run_scout)
+    from newsroom import gather
+    searched = []
+    monkeypatch.setattr(gather, "news_search", lambda q, limit=8: searched.append(q) or [
+        {"url": "https://news.example/1", "title": "Earlier story", "snippet": "Reuters", "spike": {}}])
     run(write=False)
-    assert len(tasks) == 2 and tasks[1]["tools"] == ["news_search", "read", "db_signals"]
+    # The reporter ran the news search itself (not trusting the scout to), then sent the scout to read.
+    assert searched and len(tasks) == 2 and tasks[1]["tools"] == ["read", "news_search"]
