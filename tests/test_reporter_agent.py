@@ -76,11 +76,12 @@ DEFAULTS = {
     "triage": {"decision": "fix", "why": "wording", "fixes": ["cut the vague line"]},
     "revise": DRAFT,
     "skeptic": APPROVE, "virality": APPROVE, "novelty": APPROVE,
+    "pivot": {"pivot": False, "why": "nothing a reader would care about"},
 }
 
 STEPS = [("frame", "frame the story"), ("plan", "size the investigation"), ("direct", "direct the next round"),
          ("memo", "the verdict memo"), ("triage", "council sent your draft back"), ("revise", "revise the draft"),
-         ("write", "write the article")]
+         ("write", "write the article"), ("pivot", "is there a different, true story")]
 
 
 class FakeModel:
@@ -231,6 +232,26 @@ def test_kill_when_the_minimum_story_is_contradicted_with_a_memo(env, monkeypatc
     assert result["verdict"]["verdict"] == "kill" and "H1 is contradicted" in result["verdict"]["why"]
     assert result["final"]["status"] == "killed" and "article" not in result
     assert result["verdict"]["memo"]["would_change_it"]
+
+
+def test_a_failed_story_pivots_to_what_the_records_do_support(env, monkeypatch):
+    # The planned story dies (the innocent explanation holds), but H1 is new and supported by a record.
+    found = {**SUPPORT, "The steering": [finding(GOV, "The recall attributes it to aftermarket parts.", "contradicts")]}
+    fake_scouts(monkeypatch, found)
+    pivot = {"pivot": True, "hypothesis": "NHTSA opened an engineering analysis nobody has reported.",
+             "minimum_story": "NHTSA is analysing steering loss.", "rests_on": ["H1", "H3"], "why": "unreported federal probe"}
+    monkeypatch.setattr(llm, "ask_json", FakeModel(pivot=pivot))
+    result = run()
+    v = result["verdict"]
+    assert (v["verdict"], v["story"]) == ("write", "pivot") and v["pivot"]["rests_on"] == ["H1"]   # H3 doesn't hold
+    assert v["narrowed_hypothesis"].startswith("NHTSA opened") and result["final"]["status"] == "published"
+
+
+def test_a_pivot_must_rest_on_a_new_supported_finding(env, monkeypatch):
+    found = {**SUPPORT, "The steering": [finding(GOV, "The recall attributes it to aftermarket parts.", "contradicts")]}
+    fake_scouts(monkeypatch, found)
+    monkeypatch.setattr(llm, "ask_json", FakeModel(pivot={"pivot": True, "hypothesis": "x", "rests_on": ["H2"], "why": "w"}))
+    assert run()["verdict"]["verdict"] == "kill"          # H2 is news reporting, not a new record
 
 
 def test_minimum_story_is_written_when_only_the_maximum_part_is_missing(env, monkeypatch):

@@ -168,6 +168,27 @@ Reply with JSON only:
  "stop": false, "stop_reason": "plan covered | no new yield | nothing left could change the verdict"}
 """
 
+PIVOT = """
+# Your job right now: is there a different, true story in what the scouts established?
+
+The story as planned won't run: {why}
+But the scouts established things with primary records that no outlet has published. Reporters follow the
+evidence: the story is what the records show, not what we expected them to show.
+
+Using ONLY sub-hypotheses whose proof status is supported or disputed, and their verified quotes, is there a
+story that:
+  (a) leads with at least one sub-hypothesis marked NEW (listed at the top as the NEW FINDING),
+  (b) a general reader would care about: a number nobody computed, two records that disagree, a promise
+      against what happened, an official status that isn't true in practice, money moving somewhere unexpected,
+  (c) states plainly what contradicted the original premise, when a reader would otherwise be misled.
+Say no if the only new material is trivia, a restatement of a press release, or a document merely existing.
+
+Reply with JSON only:
+{{"pivot": true, "hypothesis": "one sentence the records support", "minimum_story": "what the article
+establishes, in two sentences", "rests_on": ["H2"], "why": "why a reader would care"}}
+or {{"pivot": false, "why": "..."}}
+"""
+
 MEMO = """
 # Your job right now: the verdict memo
 
@@ -946,12 +967,38 @@ class Investigation:
             v, story = down, ""
             why = f"downgraded by the reporter: {downgraded['why']}"
         novel = new_findings(self.subs, self.coverage_urls)
+        pivot = None
+        if v in ("kill", "park") and novel and not downgraded:
+            pivot = self.pivot(why)
+            if pivot:
+                self.frame["pivot_story"] = pivot["minimum_story"]
+                v, story, why = "write", "pivot", (f"the planned story failed ({why[:300]}); the records support a "
+                                                  f"different one, resting on {', '.join(pivot['rests_on'])}: {pivot['why']}")
+                novel = [n for n in novel if n[0]["id"] in pivot["rests_on"]] or novel
         new_finding = ({"id": novel[0][0]["id"], "statement": novel[0][0]["statement"], "novelty": novel[0][0]["novelty"],
                         "url": novel[0][1]["url"], "quote": novel[0][1]["quote"]} if novel else None)
         return {"verdict": v, "story": story, "why": why, "downgraded": downgraded, "new_finding": new_finding, "at": now(),
                 "memo": reply.get("memo") if isinstance(reply.get("memo"), dict) else {},
-                "narrowed_hypothesis": str(reply.get("narrowed_hypothesis") or "").strip(),
+                "narrowed_hypothesis": pivot["hypothesis"] if pivot else str(reply.get("narrowed_hypothesis") or "").strip(),
+                "pivot": pivot,
                 "headline_idea": str(reply.get("headline_idea") or "")}
+
+    def pivot(self, why: str) -> dict | None:
+        """A different story the records support, when the planned one was killed or parked. Checked in code:
+        it must rest only on supported or disputed sub-hypotheses, at least one of them a new finding."""
+        reply = self.ask(PIVOT.format(why=why), f"{brief(self.h)}\n\n{self._status_listing()}", max_tokens=2000)
+        if reply.get("pivot") is not True or not str(reply.get("hypothesis", "")).strip():
+            self.say(f"  no pivot: {str(reply.get('why', ''))[:200]}")
+            return None
+        holds = {s["id"] for s in self.subs if not s["dropped"] and status(s["findings"]) in ("supported", "disputed")}
+        novel = {sub["id"] for sub, _ in new_findings(self.subs, self.coverage_urls)}
+        rests = [r for r in _strs(reply.get("rests_on")) if r in holds]
+        if not rests or not set(rests) & novel:
+            self.say(f"  pivot rejected: it must rest on supported findings including a new one (said {reply.get('rests_on')})")
+            return None
+        self.say(f"  PIVOT: {reply['hypothesis']}")
+        return {"hypothesis": str(reply["hypothesis"]).strip(), "minimum_story": str(reply.get("minimum_story", "")).strip(),
+                "rests_on": rests, "why": str(reply.get("why", "")).strip()}
 
     # 6. draft
     def sources(self) -> dict[str, dict]:
@@ -973,7 +1020,8 @@ class Investigation:
                 "quote": f["quote"], "source_type": f["source_type"], "finding": f["finding"]}
 
     def _writer_input(self, decision: dict, sources: dict) -> str:
-        which = self.frame.get("maximum_story") if decision["story"] == "maximum" else self.frame.get("minimum_story")
+        which = {"maximum": self.frame.get("maximum_story"), "pivot": self.frame.get("pivot_story")}.get(
+            decision["story"]) or self.frame.get("minimum_story")
         subs = "\n".join(f"- {s['id']} ({status(s['findings'])}): {s['statement']}" for s in self.subs if not s["dropped"])
         listing = "\n\n".join(f"[{sid}] {s['title']} ({s.get('source_type', '')}{', ' + s['finding'] if s.get('finding') else ''})\n"
                               f"{s['url']}\n{s['text'][:2000]}" for sid, s in sources.items())
