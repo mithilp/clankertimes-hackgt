@@ -7,6 +7,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent / "agents"
 MAX_EXAMPLE_CHARS = 12_000   # keep instructions from swamping the actual input
+# What a records-driven scoop looks like (agents/good-journalism.md), for the agents that decide what is
+# worth reporting and how it is written.
+GUIDE = ROOT / "good-journalism.md"
+READS_GUIDE = {"mclovin", "reporter", "council/novelty", "council/virality"}
 
 
 def path(agent: str) -> Path:
@@ -23,6 +27,8 @@ def load(agent: str, *, examples: bool = True) -> str:
     if not playbook.exists():
         raise FileNotFoundError(f"no playbook at {playbook}")
     parts = [playbook.read_text(encoding="utf-8")]
+    if agent in READS_GUIDE and GUIDE.exists():
+        parts.append(GUIDE.read_text(encoding="utf-8"))
     if examples:
         budget = MAX_EXAMPLE_CHARS
         for kind, label in (("good", "Examples of doing this job well"), ("bad", "Examples of doing it badly")):
