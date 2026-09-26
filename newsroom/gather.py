@@ -118,11 +118,11 @@ def bluesky_trending(limit: int = 20) -> list[dict]:
 
 _ATOM = {"a": "http://www.w3.org/2005/Atom"}
 # Reddit limits unauthenticated feed requests per IP, so every Bossman on this machine shares one
-# schedule, kept in runs/reddit/: at most one request every REDDIT_GAP seconds across all processes; after
+# schedule, kept in runs/reddit/: at most one request a minute (REDDIT_GAP) across all processes; after
 # a 429, everyone pauses Reddit (5 minutes, doubling if it happens again soon after, up to an hour); and a
 # subreddit fetched in the last REDDIT_CACHE seconds is reused instead of fetched again.
 REDDIT_DIR = Path("runs") / "reddit"
-REDDIT_GAP = float(os.getenv("NEWSROOM_REDDIT_GAP", "6"))
+REDDIT_GAP = float(os.getenv("NEWSROOM_REDDIT_GAP", "60"))   # Reddit 429s unregistered clients even at 6s
 REDDIT_CACHE = 300
 _reddit_lock = threading.Lock()
 
