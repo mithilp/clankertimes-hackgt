@@ -51,3 +51,7 @@ Published articles are written to `published/`. Everything else lives in `data/n
 ```
 
 The previous beat-driven newsroom was removed; see git history (`122ea29`) for it.
+
+## Agents
+
+What each agent's job is and what doing it well means — playbooks, rubrics, good and bad examples, and evals — lives in [agents/](agents/). Start with [agents/README.md](agents/README.md).
