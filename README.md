@@ -2,7 +2,7 @@
 
 Agent newsroom: scouts loop for stories, reporters develop them with open-ended tools (web search, fetch, a real browser), a review panel checks them, and a managing editor publishes. Demo is a real four-hour unattended run.
 
-Plan: [ARCHITECTURE.md](ARCHITECTURE.md) · Schema: [db/schema.sql](db/schema.sql)
+Design: [ARCHITECTURE.md](ARCHITECTURE.md) · Build order and schedule: [IMPLEMENTATION_PLAN.md](IMPLEMENTATION_PLAN.md) · Schema: [db/schema.sql](db/schema.sql)
 
 ## Layout
 

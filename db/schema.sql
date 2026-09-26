@@ -117,6 +117,7 @@ create table facts (
   tool_call_id bigint references tool_calls(id),
   fact         text not null,
   source_id    uuid references sources(id),
+  quoted_span  text not null,                -- verbatim from the source; checked against the archive
   bearing      text check (bearing in ('supports', 'contradicts', 'context')),
   created_at   timestamptz not null default now()
 );

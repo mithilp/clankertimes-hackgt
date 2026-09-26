@@ -47,6 +47,8 @@ class Settings:
     # Parallelism, per process. Scale further by running more replicas.
     reporter_concurrency: int = _int("REPORTER_CONCURRENCY", 3)
     reviewer_concurrency: int = _int("REVIEWER_CONCURRENCY", 2)
+    # MVP runs the verifier alone; the full panel is "verifier,skeptic,fairness".
+    reviewers: tuple = tuple(os.getenv("REVIEWERS", "verifier,skeptic,fairness").split(","))
 
     # Scouts
     scout_interval_s: int = _int("SCOUT_INTERVAL_S", 600)
@@ -54,7 +56,7 @@ class Settings:
 
     # Managing editor
     promote_threshold: float = _float("PROMOTE_THRESHOLD", 0.55)
-    duplicate_similarity: float = _float("DUPLICATE_SIMILARITY", 0.90)
+    duplicate_similarity: float = _float("DUPLICATE_SIMILARITY", 0.85)
     max_active_stories: int = _int("MAX_ACTIVE_STORIES", 6)
     max_appeals_granted: int = _int("MAX_APPEALS_GRANTED", 1)
     spend_cap_usd: float = _float("SPEND_CAP_USD", 150.0)
@@ -64,7 +66,7 @@ class Settings:
     extra_tool_calls: int = _int("EXTRA_TOOL_CALLS", 35)
     base_minutes: int = _int("BASE_MINUTES", 15)
     extra_minutes: int = _int("EXTRA_MINUTES", 30)
-    yield_window: int = _int("YIELD_WINDOW", 8)             # last N source calls with zero new facts
+    yield_window: int = _int("YIELD_WINDOW", 5)             # last N page fetches with zero new facts
     lease_seconds: int = _int("LEASE_SECONDS", 180)
 
     fetch_chars: int = _int("FETCH_CHARS", 12000)           # page text returned per fetch call

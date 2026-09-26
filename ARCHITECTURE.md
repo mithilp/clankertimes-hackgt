@@ -111,7 +111,7 @@ The hard part. Three mechanisms, all cheap to build:
 
 **a. Plan coverage, not effort.** Stop when every high-value item in the evidence plan has been checked and none of them moved the hypothesis. That's the difference between "I got tired" and "I looked at the things that would have answered this."
 
-**b. Marginal yield.** Log every *new* fact that bears on the hypothesis, tied to the tool call that produced it. If the last N sources produced zero new facts, we're in diminishing returns. This is the empirical version of "have I looked hard enough," it beats a timer, and it graphs well on the dashboard.
+**b. Marginal yield.** Log every *new* fact that bears on the hypothesis, tied to the tool call that produced it. If the last N page fetches (default 5; searches don't count) produced zero new facts, we're in diminishing returns. Facts carry a verbatim quote, checked against the fetched page like claims are. This is the empirical version of "have I looked hard enough," it beats a timer, and it graphs well on the dashboard.
 
 **c. Budget with an appeal.** Each story gets a tool-call and wall-clock budget sized by the lead's score. When it runs out the reporter can request an extension, but must state what specifically it would check next and why that could change the outcome. The managing editor grants or denies. Dedication where it's earned, rabbit holes cut off. (Judges love watching an agent ask for more time and get told no.)
 
@@ -133,10 +133,10 @@ Every dead story gets one paragraph: what was checked, what was found, what woul
 
 Coordination must have a single owner; several editors deciding in parallel means races and double-assigned stories.
 
-- Wakes on `new_lead` notifications. Dedupes by exact fingerprint and embedding similarity, then promotes or holds.
+- Wakes on `new_lead` notifications. Dedupes by exact fingerprint; embedding similarity above the cutoff only flags a possible duplicate, and one model call decides whether it's the same hypothesis. Then promotes or holds.
 - Blocks two reporters working the same hypothesis (enforced in the database too — see §6).
 - Grants or denies budget appeals.
-- Publishes, and writes the story's agent timeline.
+- Publishes through a deterministic gate: every claim marked verified by the verifier and every quote still found verbatim in its archived source. Reviewers mark claims; code decides. Writes the story's agent timeline.
 
 Mostly code plus one model call per decision, not a full agent.
 
@@ -150,7 +150,7 @@ Reviewers differ by **job**, not by political persona. Persona prompts on one mo
 
 Run reviewers on different models where possible for genuine diversity.
 
-**Rule:** any reviewer can block with a written reason. The story goes back to the reporter once, with a half budget top-up; a second block kills it, with the reviewers' reasons as the kill memo.
+**Rule:** any reviewer can block with a written reason. The story goes back to the reporter once, with a half budget top-up; a second block parks it, with the reviewers' reasons as the memo. The verifier's overall verdict is overridden by code: any claim it marks unsupported, or fails to check, is a block. `REVIEWERS=verifier` runs the MVP with the verifier alone.
 
 **Guardrail:** no allegations about named private individuals. Named officials and organizations are allowed, phrased strictly as what the records show. Four hours of unattended publishing with real names is the one way this becomes a problem instead of a win.
 
@@ -171,7 +171,7 @@ Full DDL: [`db/schema.sql`](db/schema.sql).
 - `agent_events` — curated dashboard feed
 - `counters` — view for the dashboard
 
-Coordination state lives in Postgres because it needs exact, immediate answers. Workers claim stories with a lease (`FOR UPDATE SKIP LOCKED`, `lease_owner`, `lease_expires_at`), so a race has exactly one winner and a dead worker's story is resumed by another. Triggers fire `pg_notify` on new leads, appeals and story status changes, so the next worker wakes within milliseconds; every worker also polls every 10�30s, so a missed notification costs seconds, not a stuck pipeline. Citations are checked mechanically: every fetched page's text is archived, and a draft is rejected unless each claim's quoted span appears verbatim in the archived text of its source.
+Coordination state lives in Postgres because it needs exact, immediate answers. Workers claim stories with a lease (`FOR UPDATE SKIP LOCKED`, `lease_owner`, `lease_expires_at`), so a race has exactly one winner and a dead worker's story is resumed by another. Triggers fire `pg_notify` on new leads, appeals and story status changes, so the next worker wakes within milliseconds; every worker also polls every 10–30s, so a missed notification costs seconds, not a stuck pipeline. Citations are checked mechanically: every fetched page's text is archived, and a draft is rejected unless each claim's quoted span appears verbatim in the archived text of its source.
 
 ### Shared memory (mem0)
 
@@ -203,8 +203,8 @@ What does not: dedupe, locks, handoffs (mem0 is LLM-extracted and similarity-sea
 |---|---|---|
 | Scouts | Yes, every beat at once | One asyncio task per beat. Each beat holds an advisory lock, so a second replica is a hot standby per beat, never a duplicate |
 | Managing editor | No, one on purpose | Advisory-lock singleton. A second replica waits and takes over within ~15s if the first dies |
-| Reporters | Yes | `replicas � REPORTER_CONCURRENCY` slots, each working one story under a lease. Parallel tool calls within one turn also run concurrently |
-| Reviewers | Yes, two levels | `replicas � REVIEWER_CONCURRENCY` stories at once; the three reviewers of one story run concurrently |
+| Reporters | Yes | `replicas × REPORTER_CONCURRENCY` slots, each working one story under a lease. Parallel tool calls within one turn also run concurrently |
+| Reviewers | Yes, two levels | `replicas × REVIEWER_CONCURRENCY` stories at once; the three reviewers of one story run concurrently |
 
 The number of stories in flight is capped by the editor (`MAX_ACTIVE_STORIES`), not by how many reporter slots exist. A global `SPEND_CAP_USD`, checked against `model_usage`, stops promotions, scouting and new reporting once reached.
 

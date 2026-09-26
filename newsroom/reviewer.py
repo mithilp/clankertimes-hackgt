@@ -1,6 +1,6 @@
 """Review panel: verifier, skeptic, fairness. Parallel across stories (lease-claimed slots) and
 within a story (the three reviewers run concurrently). Any block sends the story back once;
-a second block kills it."""
+a second block parks it. Which reviewers run is set by REVIEWERS (MVP: verifier only)."""
 
 import asyncio
 import logging
@@ -36,8 +36,10 @@ ROLES = {
     "verifier": (settings.models.verifier, COMMON + """
 
 Your job: does each quoted excerpt actually support its sentence as written? Block if any sentence overstates its
-source, adds facts not in the excerpt, or misattributes. Numbers, dates and names must match exactly. List a
-claim_check for every claim."""),
+source, adds facts not in the excerpt, or misattributes. Numbers, dates and names must match exactly. Also block
+(and mark the claim unsupported) any claim that alleges wrongdoing by a named private individual, or that states
+something about an official or organization without attributing it to the record. List a claim_check for every
+claim."""),
     "skeptic": (settings.models.skeptic, COMMON + """
 
 Your job: try to kill the story. Look for innocent explanations the draft ignores, missing context (was this
@@ -79,8 +81,20 @@ async def review_story(story, worker: str) -> None:
         model, system = ROLES[role]
         return role, model, await structured(f"reviewer:{role}", model, system, text, Review, effort="high")
 
-    results = await asyncio.gather(*(run(r) for r in ROLES))
+    results = await asyncio.gather(*(run(r) for r in settings.reviewers))
     p = await db.pool()
+    n_claims = await p.fetchval("select count(*) from claims where story_id = $1", sid)
+    for i, (role, model, r) in enumerate(results):
+        if role != "verifier":
+            continue
+        checked = {c.position for c in r.claim_checks}
+        unsupported = sorted(c.position for c in r.claim_checks if not c.supported)
+        missing = n_claims - len(checked & set(range(n_claims)))
+        if r.verdict == "approve" and (unsupported or missing):
+            # Code, not the model's overall verdict, decides: any unsupported or unchecked claim is a block.
+            reason = f"claims {unsupported} unsupported" if unsupported else f"{missing} claims not checked"
+            results[i] = (role, model, Review(verdict="block", reason=f"{r.reason} ({reason})",
+                                              claim_checks=r.claim_checks))
     async with p.acquire() as conn, conn.transaction():
         for role, model, r in results:
             await conn.execute(
@@ -106,9 +120,9 @@ async def review_story(story, worker: str) -> None:
         await db.release(sid, worker, status="assigned", review_round=1)
     else:
         memo = "Blocked twice by the review panel. " + " ".join(f"{role}: {r.reason}" for role, r in blocks)
-        await db.release(sid, worker, status="killed", resolution="killed", kill_memo=memo)
-        await db.event("review-panel", "killed", memo, story_id=sid)
-        await memory.remember(f"Killed at review: {story['headline']}. {memo}", agent_id="review-panel",
+        await db.release(sid, worker, status="dormant", resolution="unresolved", kill_memo=memo)
+        await db.event("review-panel", "parked", memo, story_id=sid)
+        await memory.remember(f"Parked at review: {story['headline']}. {memo}", agent_id="review-panel",
                               kind="editorial_precedent")
 
 
@@ -134,5 +148,6 @@ async def slot(n: int, waker: db.Waker) -> None:
 
 async def main() -> None:
     waker = await db.Waker("story_review").start()
-    log.info("review pool: %d concurrent stories x %d reviewers", settings.reviewer_concurrency, len(ROLES))
+    log.info("review pool: %d concurrent stories x reviewers %s", settings.reviewer_concurrency,
+             ",".join(settings.reviewers))
     await asyncio.gather(*(slot(n, waker) for n in range(settings.reviewer_concurrency)))

@@ -26,7 +26,7 @@ Work in this order:
 3. The gap: what nobody has established. Everything after this points at the gap.
 4. Go get it: records, filings, datasets, agency and company sites, the browser for portals that need JavaScript,
    public discourse for leads. Use memory_search for hints about where to look. After each check, update_plan_item.
-   Every time a source tells you something new that bears on the hypothesis, record_fact.
+   Every time a source tells you something new that bears on the hypothesis, record_fact with a verbatim quote.
 5. Resolve with exactly one of:
    - submit_draft: the evidence confirms it (or the contradiction is itself a story). Every sentence is a claim with
      the URL it came from and a verbatim quote from that page. Quotes are checked mechanically against what you
@@ -64,10 +64,11 @@ async def _budget_state(story_id) -> dict:
 
 
 async def _yield_state(story_id) -> tuple[int, int]:
-    """(new facts from the last N research calls, N actually available)."""
+    """(new facts from the last N page fetches, N actually available). Searches don't count."""
     p = await db.pool()
     row = await p.fetchrow(
-        """with recent as (select id from tool_calls where story_id = $1 and billable order by id desc limit $2)
+        """with recent as (select id from tool_calls where story_id = $1 and tool in ('fetch_url', 'browse')
+                           order by id desc limit $2)
            select (select count(*) from recent) as calls,
                   (select count(*) from facts where tool_call_id in (select id from recent)) as facts""",
         story_id, settings.yield_window,
@@ -188,12 +189,15 @@ class StoryWork:
         existing = await p.fetch("select fact from facts where story_id = $1", self.story["id"])
         if any(_norm(r["fact"]) == _norm(inp["fact"]) for r in existing):
             return "Already recorded; not a new fact."
+        if not web.span_in_source(inp["source_url"], inp["quoted_span"]):
+            raise ValueError("quoted_span not found verbatim in the fetched text of that URL; fetch it and quote exactly")
         source_id = await _source_id(inp["source_url"])
         call_id = await p.fetchval(
             "select max(id) from tool_calls where story_id = $1 and source_id = $2", self.story["id"], source_id)
         await p.execute(
-            "insert into facts (story_id, tool_call_id, fact, source_id, bearing) values ($1,$2,$3,$4,$5)",
-            self.story["id"], call_id, inp["fact"], source_id, inp["bearing"],
+            """insert into facts (story_id, tool_call_id, fact, source_id, quoted_span, bearing)
+               values ($1,$2,$3,$4,$5,$6)""",
+            self.story["id"], call_id, inp["fact"], source_id, inp["quoted_span"], inp["bearing"],
         )
         return f"Recorded ({len(existing) + 1} facts so far)."
 
@@ -223,7 +227,7 @@ class StoryWork:
         if not plan["exists"]:
             notes.append("Write the evidence plan before researching further.")
         if calls >= settings.yield_window and new_facts == 0:
-            notes.append(f"Diminishing returns: your last {calls} research calls produced no new facts.")
+            notes.append(f"Diminishing returns: your last {calls} page fetches produced no new facts.")
         if plan["top_all_checked"] and plan["top_none_moved"]:
             notes.append("Every top-ranked plan item is checked and none moved the hypothesis. Resolve now.")
         if b["exhausted"]:
@@ -273,10 +277,12 @@ class StoryWork:
                  {"rank": {"type": "integer"},
                   "status": {"type": "string", "enum": ["checked_no_change", "checked_moved", "unreachable"]}},
                  ["rank", "status"], self.update_plan_item, billable=False),
-            Tool("record_fact", "Record a new fact bearing on the hypothesis, from a page you fetched.",
+            Tool("record_fact", "Record a new fact bearing on the hypothesis, from a page you fetched, with the "
+                 "exact words that establish it. The quote is checked against the fetched text.",
                  {"fact": {"type": "string"}, "source_url": {"type": "string"},
+                  "quoted_span": {"type": "string", "description": "Exact words from that page."},
                   "bearing": {"type": "string", "enum": ["supports", "contradicts", "context"]}},
-                 ["fact", "source_url", "bearing"], self.record_fact, billable=False),
+                 ["fact", "source_url", "quoted_span", "bearing"], self.record_fact, billable=False),
             Tool("request_extension", "Ask the managing editor for more research calls. Say exactly what you would "
                  "check next and why it could change the outcome.",
                  {"extra_calls": {"type": "integer"}, "next_checks": {"type": "string"},

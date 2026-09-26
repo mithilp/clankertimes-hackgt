@@ -38,7 +38,7 @@ async def triage_leads() -> None:
                order by o.embedding <=> l.embedding limit 1""",
             lead["id"],
         )
-        if dup and dup["sim"] >= settings.duplicate_similarity:
+        if dup and dup["sim"] >= settings.duplicate_similarity and await same_hypothesis(lead, dup):
             await p.execute("update leads set status = 'duplicate', duplicate_of = $2 where id = $1",
                             lead["id"], dup["id"])
             await db.event(AGENT, "lead_duplicate", f"{dup['sim']:.2f} similar to: {dup['hypothesis']}",
@@ -54,6 +54,22 @@ async def triage_leads() -> None:
         f"select {db.LEAD_COLS} from leads where status = 'new' order by score desc, created_at limit $1", free
     ):
         await promote(lead)
+
+
+class SameCheck(BaseModel):
+    same: bool
+    reason: str
+
+
+async def same_hypothesis(lead, other) -> bool:
+    """Similarity only flags a possible duplicate; a model call decides."""
+    ruling = await structured(
+        AGENT, settings.models.editor,
+        "Decide whether two newsroom leads test the same hypothesis: same actor, same claim, same records would "
+        "settle both. Different contracts, dates, or agencies mean different hypotheses.",
+        f"A: {lead['hypothesis']}\nB: {other['hypothesis']}", SameCheck, effort="low",
+    )
+    return ruling.same
 
 
 async def promote(lead) -> None:
@@ -146,9 +162,32 @@ async def timeline(story_id) -> str:
     return "\n".join(f"{r[0]:%H:%M:%S} {r['agent']} {r['tool']}: {r['reason']}" for r in rows)
 
 
+async def publish_gate(story_id) -> str | None:
+    """Deterministic: every claim verified by the verifier and every quote still found in its source.
+    Returns None if the story may publish, else the reason it may not."""
+    p = await db.pool()
+    claims = await p.fetch("""select c.position, c.verified, c.quoted_span, s.url from claims c
+                              join sources s on s.id = c.source_id where c.story_id = $1""", story_id)
+    if not claims:
+        return "no claims"
+    unverified = [c["position"] for c in claims if c["verified"] is not True]
+    if unverified:
+        return f"claims {unverified} not verified"
+    missing = [c["position"] for c in claims if not web.span_in_source(c["url"], c["quoted_span"])]
+    if missing:
+        return f"quotes for claims {missing} not found in archived sources"
+    return None
+
+
 async def publish_approved() -> None:
     p = await db.pool()
     for story in await p.fetch("select * from stories where status = 'approved'"):
+        failed = await publish_gate(story["id"])
+        if failed:
+            await p.execute("""update stories set status = 'dormant', resolution = 'unresolved', kill_memo = $2
+                               where id = $1 and status = 'approved'""", story["id"], f"Publish gate: {failed}")
+            await db.event(AGENT, "publish_blocked", failed, story_id=story["id"])
+            continue
         tl = await timeline(story["id"])
         done = await p.execute(
             """update stories set status = 'published', published_at = now(), timeline = $2
