@@ -3,8 +3,11 @@
 This is the newsroom's vector database. Everything else (stories, hypotheses, scout findings,
 verdicts, events, the LLM cache, fetched page text) stays in SQLite in newsroom/db.py.
 
-    Bossman  --add()-->  signals store  --recent() / similar()-->  McLovin
-                                        <--mark_used()-- McLovin, when a signal feeds a hypothesis
+    Bossman         --add()----------->  signals store  --recent() / similar()-->  McLovin
+    record_signals  --add(near=False)->                 <--mark_used()-- McLovin, when a signal feeds a hypothesis
+
+record_signals (newsroom/record_signals.py) writes what is moving in the official records: spikes in
+complaints and adverse-event reports, and new recalls and investigations.
 
 Three implementations share this contract:
   * InMemorySignals, below: the reference implementation, used by the tests
@@ -99,10 +102,13 @@ def origin_key(origin: str) -> str:
 
 
 class SignalStore(Protocol):
-    def add(self, signal: Signal) -> tuple[str, bool]:
+    def add(self, signal: Signal, *, near: bool = True) -> tuple[str, bool]:
         """Store a signal. Returns (id, created). If it duplicates an existing signal (same origin, or
         near-identical text about the same accountable party), merges its sources into that one,
-        bumps last_seen, and returns (existing id, False)."""
+        bumps last_seen, and returns (existing id, False).
+
+        near=False checks the origin only. For signals built from templates (newsroom/record_signals.py),
+        whose origins are exact keys and whose texts about one company differ by a few words."""
 
     def get(self, signal_id: str) -> Signal | None: ...
 
@@ -132,19 +138,20 @@ class InMemorySignals:
     def __init__(self) -> None:
         self._by_id: dict[str, Signal] = {}
 
-    def _find_duplicate(self, signal: Signal) -> Signal | None:
+    def _find_duplicate(self, signal: Signal, near: bool = True) -> Signal | None:
         key = origin_key(signal.origin)
         for existing in self._by_id.values():
             if origin_key(existing.origin) == key:
                 return existing
+        for existing in self._by_id.values() if near else ():
             same_party = existing.accountable_party.strip().lower() == signal.accountable_party.strip().lower()
             if same_party and _overlap(existing.text(), signal.text()) >= MERGE_SIMILARITY:
                 return existing
         return None
 
-    def add(self, signal: Signal) -> tuple[str, bool]:
+    def add(self, signal: Signal, *, near: bool = True) -> tuple[str, bool]:
         seen = signal.last_seen or now()
-        if existing := self._find_duplicate(signal):
+        if existing := self._find_duplicate(signal, near):
             known = {s.get("url") for s in existing.sources}
             existing.sources += [s for s in signal.sources if s.get("url") not in known]
             existing.source_types = sorted(set(existing.source_types) | set(signal.source_types))
@@ -200,8 +207,8 @@ class FileSignals(InMemorySignals):
         tmp.write_text(json.dumps([s.to_dict() for s in self._by_id.values()], indent=1), encoding="utf-8")
         tmp.replace(self.path)
 
-    def add(self, signal: Signal) -> tuple[str, bool]:
-        result = super().add(signal)
+    def add(self, signal: Signal, *, near: bool = True) -> tuple[str, bool]:
+        result = super().add(signal, near=near)
         self._save()
         return result
 

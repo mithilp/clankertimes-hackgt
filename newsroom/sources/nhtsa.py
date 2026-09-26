@@ -128,6 +128,93 @@ def save_investigations(conn, zip_path: Path) -> tuple[int, int]:
     return len(investigations), len(vehicles)
 
 
+RECALLS_URL = "https://static.nhtsa.gov/odi/ffdd/rcl/FLAT_RCL_POST_2010.zip"
+# Column positions in the recall file (layout: https://static.nhtsa.gov/odi/ffdd/rcl/RCL.txt), field number minus one.
+# (The RCL_FROM_<years>.zip files next to it are an index of recall documents, not the recalls.)
+R_CAMPNO, R_MAKE, R_MODEL, R_YEAR, R_COMPNAME, R_MFGNAME, R_POTAFF, R_INFLUENCED_BY, R_RCDATE = 1, 2, 3, 4, 6, 7, 11, 13, 15
+R_DEFECT, R_CONSEQUENCE, R_DO_NOT_DRIVE, R_PARK_OUTSIDE = 19, 20, 27, 28
+
+
+def download_recalls(dest_dir: Path) -> Path:
+    """NHTSA's recalls since 2010, one row per campaign, vehicle and component. Republished daily."""
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    path = dest_dir / "FLAT_RCL_POST_2010.zip"
+    with httpx.stream("GET", RECALLS_URL, timeout=600, follow_redirects=True) as response:
+        response.raise_for_status()
+        with open(path, "wb") as out:
+            for chunk in response.iter_bytes():
+                out.write(chunk)
+    return path
+
+
+def parse_recalls(zip_path: Path, since: str = "") -> Iterator[dict]:
+    """One recall per campaign filed on or after `since` (YYYY-MM-DD), in the shape of db.save_recalls()."""
+    campaigns: dict[str, list[list[str]]] = {}
+    with zipfile.ZipFile(zip_path) as archive:
+        name = next(n for n in archive.namelist() if n.lower().endswith(".txt"))
+        with archive.open(name) as raw:
+            for line in io.TextIOWrapper(raw, encoding="latin-1", newline=""):
+                p = line.rstrip("\r\n").split("\t")
+                if len(p) <= R_CONSEQUENCE or not p[R_CAMPNO].strip() or _date(p[R_RCDATE]) < since:
+                    continue
+                campaigns.setdefault(p[R_CAMPNO].strip(), []).append(p)
+    for campno, rows in campaigns.items():
+        first = rows[0]
+        do_not_drive, park_outside = _any_yes(rows, R_DO_NOT_DRIVE), _any_yes(rows, R_PARK_OUTSIDE)
+        influenced = first[R_INFLUENCED_BY].strip()
+        units = _int(first[R_POTAFF])  # the same on every row of a campaign, so not summed
+        vehicles = sorted({(r[R_MAKE].strip().upper(), r[R_MODEL].strip().upper(), r[R_YEAR].strip()) for r in rows})
+        components = sorted({component_top(r[R_COMPNAME]) for r in rows} - {""})
+        severity = [s for s, on in (("NHTSA says do not drive", do_not_drive), ("NHTSA says park outside", park_outside))
+                    if on]
+        if units:
+            severity.append(f"{units:,} units potentially affected")
+        if influenced == "ODI":
+            severity.append("influenced by an NHTSA investigation")
+        defect = " ".join(first[R_DEFECT].split())
+        defect = defect if len(defect) <= 300 else defect[:300].rsplit(" ", 1)[0] + "..."
+        yield {
+            "id": f"nhtsa_recalls:{campno}",
+            "dataset": "nhtsa_recalls",
+            "date": _date(first[R_RCDATE]),
+            "label": f"NHTSA recall {campno}",
+            "product": vehicles_label(vehicles),
+            "company": first[R_MFGNAME].strip() or None,
+            "problem": f"{'; '.join(components) or 'unknown component'}: {defect}" if defect else "; ".join(components),
+            "severity": "; ".join(severity),
+            "priority": 3 if do_not_drive else 2 if park_outside else 1 if influenced == "ODI" else 0,
+            "units": units,
+            "url": f"https://www.nhtsa.gov/recalls?nhtsaId={campno}",
+            "fields": {"vehicles": [list(v) for v in vehicles], "components": components,
+                       "consequence": " ".join(first[R_CONSEQUENCE].split())},
+        }
+
+
+def _any_yes(rows: list[list[str]], col: int) -> bool:
+    return any(len(r) > col and r[col].strip().upper() == "YES" for r in rows)
+
+
+def component_top(component: str) -> str:
+    """NHTSA's component codes are paths ("SERVICE BRAKES, HYDRAULIC:FOUNDATION COMPONENTS"); the top level
+    is what complaints, recalls and investigations have in common."""
+    return component.split(":", 1)[0].strip().upper()
+
+
+def vehicles_label(vehicles, most: int = 3) -> str:
+    """[(make, model, year), ...] -> "2023-2024 TESLA MODEL 3, 2024 TESLA MODEL Y and 2 more models"."""
+    years: dict[tuple[str, str], list[int]] = {}
+    for make, model, year in vehicles:
+        years.setdefault((make, model), [])
+        if year.isdigit() and year != "9999":
+            years[(make, model)].append(int(year))
+    names = []
+    for (make, model), ys in years.items():
+        span = "" if not ys else f"{min(ys)} " if min(ys) == max(ys) else f"{min(ys)}-{max(ys)} "
+        names.append(f"{span}{make} {model}".strip())
+    shown = ", ".join(names[:most])
+    return shown + (f" and {len(names) - most} more models" if len(names) > most else "")
+
+
 def _int(value: str) -> int:
     try:
         return int(value.strip() or 0)

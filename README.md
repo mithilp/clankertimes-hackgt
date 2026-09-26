@@ -23,6 +23,7 @@ python -m newsroom ingest-osha                     #    ~106k workplace severe i
 python -m newsroom ingest-faers --since 2026-06-01 --until 2026-06-30   # drug adverse events
 python -m newsroom ingest-caers --since 2025-01-01 --until 2025-12-31   # food/supplement/cosmetic events
 python -m newsroom ingest-investigations           #    NHTSA defect investigations, for the scouts
+python -m newsroom ingest-recalls                  #    NHTSA, FDA and CPSC recalls since 2025
 # These are read by the model:
 python -m newsroom ingest-nhtsa                    #    ~132k vehicle complaints, 2025-2026
 python -m newsroom ingest-maude --since 2026-08-01 --product-code FRN  # device reports (FRN: infusion pumps)
@@ -40,6 +41,10 @@ python -m newsroom top --source osha               #    see the biggest claim gr
 python -m newsroom run                             # 4-8. pick, hypotheses, scouts, verdict, article
 python -m newsroom show 1                          #    the full trail of story 1
 python -m newsroom usage                           #    DeepSeek tokens used so far
+
+# Put what's moving in these records into the signals store, next to Bossman's (no tokens):
+python -m newsroom record-signals --dry-run        #    build and check them; saved under runs/records/
+python -m newsroom record-signals                  #    write them; rerun after each ingest
 ```
 
 Published articles are written to `published/`. Everything else lives in `data/newsroom.db`.

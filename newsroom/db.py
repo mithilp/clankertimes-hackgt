@@ -47,6 +47,22 @@ create table if not exists investigation_vehicles (
   primary key (action, make, model, year)
 );
 
+create table if not exists recalls (      -- NHTSA, FDA and CPSC recalls: official actions, one row per campaign or event
+  id       text primary key,              -- "<dataset>:<campaign or event number>"
+  dataset  text not null,                 -- nhtsa_recalls | fda_recalls | cpsc_recalls
+  date     text not null,                 -- YYYY-MM-DD: filed (NHTSA), posted or reported (FDA), announced (CPSC)
+  label    text not null,                 -- "NHTSA recall 26V512000"
+  product  text not null,
+  company  text,
+  problem  text not null,
+  severity text not null default '',
+  priority integer not null default 0,    -- within a dataset: higher is more serious (advisory, class, injuries)
+  units    integer not null default 0,    -- units affected, or products recalled
+  url      text not null,
+  fields   text not null default '{}'     -- e.g. the vehicles and components a NHTSA recall covers
+);
+create index if not exists recalls_dataset_date on recalls(dataset, date);
+
 create table if not exists claim_groups (
   id       integer primary key,
   as_of    text not null,
@@ -184,6 +200,20 @@ def save_complaints(conn: sqlite3.Connection, complaints: Iterable[dict]) -> int
         conn.executemany("insert or ignore into claims (complaint_id, claim, coded) values (?, ?, ?)", known)
     conn.commit()
     return new
+
+
+def save_recalls(conn: sqlite3.Connection, recalls: Iterable[dict]) -> int:
+    """Insert or refresh recalls (their status and counts change after filing). Returns how many were saved."""
+    rows = [{"severity": "", "priority": 0, "units": 0, "company": None, **r, "fields": json.dumps(r.get("fields", {}))}
+            for r in recalls]
+    conn.executemany(
+        "insert or replace into recalls (id, dataset, date, label, product, company, problem, severity, priority, units,"
+        " url, fields) values (:id, :dataset, :date, :label, :product, :company, :problem, :severity, :priority,"
+        " :units, :url, :fields)",
+        rows,
+    )
+    conn.commit()
+    return len(rows)
 
 
 def event(conn: sqlite3.Connection, actor: str, action: str, reason: str, *,
