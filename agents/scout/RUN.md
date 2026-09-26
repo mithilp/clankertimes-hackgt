@@ -1,53 +1,44 @@
 # Running a Scout on its own
 
-A scout researches **one** hypothesis and brings back findings: each one a URL, the exact quote from that page, and whether it `supports`, `contradicts`, or is `unclear`.
+A scout settles **one** sub-hypothesis for the Reporter and reports back. The Reporter never searches: scouts do all the legwork. Code: [newsroom/scout_agent.py](../../newsroom/scout_agent.py).
 
-## Setup (once)
-
-```bash
-cd clankertimes-hackgt
-python -m venv .venv && .venv/bin/pip install -r requirements.txt
-cp .env.example .env        # then fill in what you use
+```
+assignment from the Reporter (statement · records to try first · the records' own terms ·
+                              what would support it · what would contradict it · budget)
+   │
+   └─ loop, within budget: choose up to 3 calls, each with a one-line reason (published as the trail)
+         the newsroom's DB   db_signals (Bossman's signals in Astra) · db_desk (quotes past investigations verified)
+         official records   nhtsa_recalls · nhtsa_investigations · fda_recalls · cpsc_recalls · court_dockets · federal_register
+         the web            news_search (Google News) · web_search (a real headless browser, or Brave's API) · read
+                            read pulls exact quotes; each is checked word for word against the page
+   │
+   └─ report back: verdict (held to the evidence in code) · summary · what was searched · not found ·
+                   dead ends · proposals (new hypotheses, with the records that would settle them) · next check
 ```
 
-Pick a model provider in `.env` or your shell:
+A scout can only report **supports** or **contradicts** if a verified quote from a source that counts (government record, court record, news reporting) says so. Otherwise its verdict is held back to **unclear**, with a note.
 
-| Provider | Set | Pays with |
-|---|---|---|
-| DeepSeek (default) | `DEEPSEEK_API_KEY=...` | DeepSeek credits |
-| Claude Code | `NEWSROOM_LLM_PROVIDER=claude_code` | your Claude Pro/Max plan (needs `claude` installed and logged in) |
+A **coverage scout** (`mode: "coverage"`) looks for prior reporting of the whole story, so the Reporter can credit it and aim at the gap. It may only report coverage it actually saw in its results.
 
-To keep experiments out of the real database, prefix commands with `NEWSROOM_DB=/tmp/scratch.db`.
+## Setup
 
-Every run prints which provider and models it used, and saves its inputs and outputs under `runs/<agent>/<timestamp>/` (git-ignored).
+Needs a model (`DEEPSEEK_API_KEY`, or `NEWSROOM_LLM_PROVIDER=claude_code`) and a search backend:
 
-Scouts search the web, so also set **either** `BRAVE_API_KEY` **or** `NEWSROOM_SEARCH_BACKEND=browser` (needs `pip install playwright && playwright install chromium`).
+- `NEWSROOM_SEARCH_BACKEND=browser`: a real local browser, free. Install it once with `pip install playwright` and `python -m playwright install chromium`. It searches Brave's web page first, then Bing, then DuckDuckGo. Any engine that answers with a bot check or with results unrelated to the query is skipped, never worked around.
+- or `BRAVE_API_KEY` for Brave's search API.
+
+`nhtsa_investigations` reads NHTSA's investigations file from the local database: load it once with `python -m newsroom ingest-investigations`.
 
 ## Command
 
 ```bash
-.venv/bin/python -m newsroom try scout \
-  --hypothesis "Tesla recalled 2023 Model 3 vehicles for loss of power steering assist" \
-  --context "Tesla Model 3 power steering" \
-  --budget 8
+.venv/Scripts/python -m newsroom try scout \
+  --hypothesis "NHTSA opened a defect investigation into loss of steering control covering 2023 Tesla Model 3 vehicles" \
+  --context "Tesla Model 3 steering" --budget 8
 ```
 
-- `--hypothesis` — one plain statement that could be true or false.
-- `--context` — a few words naming the product, company, or agency. It keeps searches on target.
-- `--budget` — searches plus page reads (default 12).
-
-## What you'll see
-
-```
-[supports] gov  https://...
-   "the exact sentence from the page"
-[contradicts] news  https://...
-   "..."
-6 findings: {'supports': 4, 'contradicts': 1, 'unclear': 1}
-```
-
-Saved to `runs/scout/<timestamp>/findings.json`.
+You'll see each call and its result as it happens, then the findings and the report. Saved to `runs/scout/<timestamp>/findings.json`.
 
 ## Judging a run
 
-Use [rubric.md](rubric.md). Check three things: every quote actually appears on its page, official records were tried before news coverage, and it looked for evidence *against* the hypothesis, not just for it.
+Use [rubric.md](rubric.md). Check that every quote appears on its page, that official records were tried before news coverage, that the scout looked for evidence *against* the statement, and that "not found" names the system and terms searched.

@@ -15,7 +15,30 @@ python -m venv .venv
 
 Add your keys to `.env` (see `.env.example` for the names): `DEEPSEEK_API_KEY` and `BRAVE_API_KEY`.
 
-## Run it
+## The agent pipeline
+
+```
+Bossman -> signals (Astra) -> McLovin -> mclov_results (Astra)
+   -> Reporter: frames the hypothesis, decides how many scouts, directs them (never searches itself)
+   -> Scouts: the newsroom DB, official records (NHTSA, FDA, CPSC, courts, Federal Register) and a real
+      browser; every quote checked against its page; each reports back
+   -> Reporter: narrows the hypothesis, reaches a verdict, drafts
+   -> Skeptic (true? fair?) + Virality (will people care?): both must approve
+        flagged -> back to the Reporter: fix it, or spike it
+        approved -> published to the `articles` collection the website reads
+```
+
+```bash
+python -m newsroom pipeline --dry-run          # what McLovin has waiting that the desk hasn't worked
+python -m newsroom pipeline --limit 1          # work one, end to end
+python -m newsroom pipeline --loop 30          # keep going, a pass every 30 minutes
+python -m newsroom pipeline --peek             # McLovin's raw documents, and how the Reporter reads them
+python -m newsroom try desk                    # what the Reporter has worked (reporter_desk in Astra)
+```
+
+How-tos: [agents/reporter/RUN.md](agents/reporter/RUN.md) · [agents/scout/RUN.md](agents/scout/RUN.md).
+
+## Run it (the records pipeline)
 
 ```bash
 # 1. Data. These spend no tokens:

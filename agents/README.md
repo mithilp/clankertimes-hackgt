@@ -28,7 +28,7 @@ Every agent runs on its own with `python -m newsroom try <agent>`, and each fold
 |---|---|---|
 | Bossman | `try bossman [--beat NAME] [--sources ...] [--replay FILE] [--loop MIN]` | [bossman/RUN.md](bossman/RUN.md) |
 | McLovin | `try mclovin [--hours N] [--input FILE]` | [mclovin/RUN.md](mclovin/RUN.md) |
-| Reporter | `try reporter --from-mclovin FILE --pick N` or `--hypothesis "..."` | [reporter/RUN.md](reporter/RUN.md) |
+| Reporter | `try reporter --from-mclovin FILE\|latest [--pick N\|--all]` or `--hypothesis "..."` | [reporter/RUN.md](reporter/RUN.md) |
 | Scout | `try scout --hypothesis "..." --context "..."` | [scout/RUN.md](scout/RUN.md) |
 | Council | `try council [--draft FILE] [--judges ...] [--seeded]` | [council/RUN.md](council/RUN.md) |
 
@@ -37,7 +37,7 @@ They chain through files and the signals store, so this runs the whole path one 
 ```bash
 .venv/bin/python -m newsroom try bossman --sources google_trends,reddit,gov
 .venv/bin/python -m newsroom try mclovin
-.venv/bin/python -m newsroom try reporter --from-mclovin runs/mclovin/<timestamp>/hypotheses.json --pick 1
+.venv/bin/python -m newsroom try reporter --from-mclovin latest --pick 1     # scouts, verdict, draft, council
 .venv/bin/python -m newsroom try council --seeded
 ```
 

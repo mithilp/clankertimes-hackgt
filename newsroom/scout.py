@@ -51,14 +51,20 @@ Before anything else, write "page_problem": the specific problem the page is abo
 Reply in JSON: {"page_problem": "...", "same_problem": true, "relevant": true, "source_type": "...", "quotes": [{"quote": "...", "finding": "supports", "note": "..."}]}"""
 
 
-def research(hypothesis: str, context: str, budget: int, official: list[dict] = ()) -> list[dict]:
+def research(hypothesis: str, context: str, budget: int, official: list[dict] = (), *,
+             guidance: str = "", leads: list[dict] = (), avoid: list[str] = (), trail: list | None = None) -> list[dict]:
     """Research one hypothesis. Returns findings: url, title, source_type, quote, finding, note.
 
     official: records already looked up for the story ({"url", "title", "text", "source_type"}); their
     text must already be in the page cache (web.remember), and their source type is taken as given.
+    guidance: the reporter's direction for this scout (where to look, what would settle it).
+    leads: pages worth a look from the newsroom's own DB ({"url", "title", "description"}), e.g. the
+        sources behind a Bossman signal. Read like search results; their source type is judged normally.
+    avoid: queries already run for this hypothesis on an earlier assignment, so they aren't repeated.
+    trail: if given, every search and page read is appended to it, so the reporter can see what was checked.
     """
     used = 0
-    tried: list[str] = []
+    tried: list[str] = list(avoid)
     seen: set[str] = set()
     findings: list[dict] = []
     known_type = {r["url"]: r["source_type"] for r in official}
@@ -69,12 +75,20 @@ def research(hypothesis: str, context: str, budget: int, official: list[dict] = 
                 seen.add(record["url"])
                 results.append({"url": record["url"], "title": f"[official record] {record['title']}",
                                 "description": record["text"][:300]})
-        for query in plan(hypothesis, context, tried, findings)[:QUERIES_PER_ROUND]:
+            for lead in leads:
+                if lead.get("url") and lead["url"] not in seen:
+                    seen.add(lead["url"])
+                    results.append({"url": lead["url"], "title": f"[newsroom lead] {lead.get('title', '')}",
+                                    "description": str(lead.get("description", ""))[:300]})
+        for query in plan(hypothesis, context, tried, findings, guidance)[:QUERIES_PER_ROUND]:
             if used >= budget:
                 break
             tried.append(query)
             used += 1
-            for result in web.search(query):
+            hits = web.search(query)
+            if trail is not None:
+                trail.append({"search": query, "results": len(hits)})
+            for result in hits:
                 if result["url"] not in seen:
                     seen.add(result["url"])
                     results.append(result)
@@ -83,9 +97,14 @@ def research(hypothesis: str, context: str, budget: int, official: list[dict] = 
                 break
             used += 1
             text = web.fetch_text(url)
+            found = []
             if text:
-                title = next((r["title"] for r in results if r["url"] == url), "").removeprefix("[official record] ")
-                findings.extend(read(hypothesis, url, title, text, source_type=known_type.get(url), context=context))
+                title = next((r["title"] for r in results if r["url"] == url), "")
+                title = title.removeprefix("[official record] ").removeprefix("[newsroom lead] ")
+                found = read(hypothesis, url, title, text, source_type=known_type.get(url), context=context)
+                findings.extend(found)
+            if trail is not None:
+                trail.append({"read": url, "quotes": len(found), "fetched": bool(text)})
         if settled(findings) or used >= budget:
             break
     return findings
@@ -95,8 +114,10 @@ def settled(findings: list[dict]) -> bool:
     return any(f["source_type"] in COUNTS_AS_PROOF and f["finding"] in ("supports", "contradicts") for f in findings)
 
 
-def plan(hypothesis: str, context: str, tried: list[str], findings: list[dict]) -> list[str]:
+def plan(hypothesis: str, context: str, tried: list[str], findings: list[dict], guidance: str = "") -> list[str]:
     prompt = f"Story context: {context}\n\nHypothesis: {hypothesis}"
+    if guidance:
+        prompt += f"\n\nYour reporter's direction (follow it): {guidance}"
     if tried:
         prompt += "\n\nAlready searched (write different queries):\n" + "\n".join(f"- {q}" for q in tried)
     if findings:

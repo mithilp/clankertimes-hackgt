@@ -9,25 +9,12 @@ from __future__ import annotations
 import argparse
 import json
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from . import bossman, config, council, db, llm, mclovin, playbooks, reporter, scout
+from . import bossman, config, council, db, mclovin, reporter, reporter_agent
 from .bossman import run_dir
 from .signals import get_store
-
-SUBHYPOTHESES = """
-# Your output
-
-You are given one hypothesis. Break it into 3-5 plain sub-hypotheses that would ALL have to be true for
-the story to hold, following the playbook above. Each must be checkable on the public web. Also give
-the minimum story (worth publishing even if the full hypothesis fails) and the maximum story.
-
-Reply with JSON only:
-{"sub_hypotheses": ["...", "..."], "context": "a few words naming the product, company or agency",
- "minimum_story": "...", "maximum_story": "..."}
-"""
 
 
 def add_parser(sub) -> None:
@@ -52,10 +39,16 @@ def add_parser(sub) -> None:
     r = agents.add_parser("reporter", help="work one hypothesis (or an existing story) with scouts")
     src = r.add_mutually_exclusive_group(required=True)
     src.add_argument("--hypothesis", help="a hypothesis to work")
-    src.add_argument("--from-mclovin", type=Path, metavar="HYPOTHESES_JSON", help="a runs/mclovin/<ts>/hypotheses.json")
+    src.add_argument("--from-mclovin", metavar="HYPOTHESES_JSON",
+                     help="a runs/mclovin/<ts>/hypotheses.json, or 'latest' for the newest McLovin run")
     src.add_argument("--story", type=int, help="rerun an existing story from the complaint pipeline")
     r.add_argument("--pick", type=int, default=1, help="with --from-mclovin: which hypothesis (1-based)")
-    r.add_argument("--budget", type=int, default=12, help="searches plus page reads per scout")
+    r.add_argument("--all", action="store_true", help="with --from-mclovin: work every hypothesis that passed its checks")
+    r.add_argument("--budget", type=int, default=12, help="searches plus page reads per scout, per assignment")
+    r.add_argument("--rounds", type=int, default=reporter_agent.MAX_ROUNDS, help="scout rounds before the verdict")
+    r.add_argument("--judges", default="skeptic,virality,novelty", help="council judges; empty to skip the council")
+    r.add_argument("--no-write", action="store_true", help="stop at the verdict; don't draft")
+    r.add_argument("--force", action="store_true", help="work a hypothesis again even if it was already killed/parked/published")
 
     s = agents.add_parser("scout", help="research one hypothesis and bring back quoted findings")
     s.add_argument("--hypothesis", required=True)
@@ -72,13 +65,18 @@ def add_parser(sub) -> None:
     c.add_argument("--seeded", action="store_true", help="plant known errors and report what gets caught")
     c.add_argument("--no-web", action="store_true", help="novelty judge skips the prior-coverage search")
 
+    d = agents.add_parser("desk", help="what the reporter has worked: the desk (Astra DB when configured)")
+    d.add_argument("--limit", type=int, default=20)
+    d.add_argument("--status", help="only this status: reporting, published, held, killed, parked, spiked, failed")
+    d.add_argument("--show", metavar="DESK_ID", help="print one investigation in full, as JSON")
+
 
 def main(args: argparse.Namespace) -> None:
     settings = config.load()
     print(f"[{args.agent}] model: {settings.llm_provider} ({settings.fast_model} / {settings.smart_model})"
           f" · search: {settings.search_backend}")
     {"bossman": _bossman, "mclovin": _mclovin, "reporter": _reporter, "scout": _scout,
-     "council": _council, "articles": _articles}[args.agent](args)
+     "council": _council, "articles": _articles, "desk": _desk}[args.agent](args)
 
 
 def _save(kind: str, name: str, data) -> Path:
@@ -198,33 +196,77 @@ def _reporter(args) -> None:
               f"\nfull trail: python -m newsroom show {args.story}")
         return
     if args.from_mclovin:
-        hyps = json.loads(args.from_mclovin.read_text(encoding="utf-8"))["hypotheses"]
-        hypothesis = hyps[args.pick - 1]["hypothesis"]
+        path = _latest_mclovin() if args.from_mclovin == "latest" else Path(args.from_mclovin)
+        hyps = json.loads(path.read_text(encoding="utf-8"))["hypotheses"]
+        if args.all:
+            todo = [h for h in hyps if not h.get("problems")]
+            print(f"{len(todo)} of {len(hyps)} hypotheses in {path} passed McLovin's checks")
+        else:
+            if not 1 <= args.pick <= len(hyps):
+                raise SystemExit(f"--pick {args.pick}: {path} has {len(hyps)} hypotheses")
+            todo = [hyps[args.pick - 1]]
     else:
-        hypothesis = args.hypothesis
-    print(f"hypothesis: {hypothesis}")
+        todo = [args.hypothesis]
+    judges = tuple(j.strip() for j in args.judges.split(",") if j.strip())
 
-    plan = llm.ask_json(playbooks.load("reporter") + "\n" + SUBHYPOTHESES, hypothesis,
-                        model=config.load().smart_model, max_tokens=2000)
-    subs = [s for s in plan.get("sub_hypotheses", []) if isinstance(s, str) and s.strip()][:5]
-    context = plan.get("context", "")
-    print(f"minimum story: {plan.get('minimum_story', '')}\nmaximum story: {plan.get('maximum_story', '')}")
-    for n, s in enumerate(subs, 1):
-        print(f"  H{n}. {s}")
+    for n, h in enumerate(todo, 1):
+        text = h if isinstance(h, str) else h["hypothesis"]
+        print(f"\n{'=' * 100}\n[{n}/{len(todo)}] hypothesis: {text}")
+        result = reporter_agent.investigate(h, budget=args.budget, rounds=args.rounds, write=not args.no_write,
+                                            judges=judges, force=args.force)
+        if result.get("skipped"):
+            continue
+        _print_investigation(result)
 
-    with ThreadPoolExecutor(max_workers=min(3, len(subs) or 1)) as pool:
-        findings = list(pool.map(lambda h: scout.research(h, context, args.budget), subs))
-    verdict, why = reporter.decide(findings)
 
-    for n, (s, fs) in enumerate(zip(subs, findings), 1):
-        tally = {k: sum(f.get("finding") == k for f in fs) for k in ("supports", "contradicts", "unclear")}
-        print(f"\nH{n}: {tally}")
-        for f in fs[:4]:
-            print(f"   [{f.get('finding')}] {f.get('url', '')}\n      \"{str(f.get('quote', ''))[:160]}\"")
-    print(f"\nVERDICT: {verdict}  —  {why}")
-    path = _save("reporter", "result.json", {"hypothesis": hypothesis, "plan": plan, "sub_hypotheses": subs,
-                                              "findings": findings, "verdict": verdict, "why": why})
-    print(f"saved {path}")
+def _latest_mclovin() -> Path:
+    runs = sorted(Path("runs/mclovin").glob("*/hypotheses.json"))
+    if not runs:
+        raise SystemExit("no McLovin runs under runs/mclovin/: run `try mclovin` first, or pass a file")
+    return runs[-1]
+
+
+def _print_investigation(result: dict) -> None:
+    sizing = result.get("sizing") or {}
+    print(f"\n{sizing.get('count', len(result['sub_hypotheses']))} scouts for {sizing.get('elements', '?')} elements"
+          f" ({sizing.get('load_bearing', '?')} load-bearing), {sizing.get('mclovin_records', 0)} McLovin records"
+          + (f", {len(sizing['deferred'])} deferred" if sizing.get("deferred") else "") + f": {sizing.get('why', '')}")
+    print("\nsub-hypotheses:")
+    for s in result["sub_hypotheses"]:
+        flag = " (dropped)" if s.get("dropped") else ""
+        print(f"  {s['id']} {s['status'].upper():<12} [{s['needed_for']}, {s['priority']}, sent {s['dispatches']}x]"
+              f" {s['statement']}{flag}")
+        for f in [f for f in s["findings"] if f["finding"] != "unclear"][:3]:
+            print(f"      [{f['finding']}] {f['source_type']}  {f['url']}\n         \"{f['quote'][:160]}\"")
+    v = result["verdict"]
+    memo = v.get("memo") or {}
+    if v["verdict"] != "write" and memo:
+        print(f"\nmemo\n  checked: {memo.get('checked', '')}\n  found: {memo.get('found', '')}"
+              f"\n  would change it: {memo.get('would_change_it', '')}"
+              + (f"\n  wake when: {memo['wake_condition']}" if memo.get("wake_condition") else ""))
+    for s in result.get("spinoffs", []):
+        print(f"\nspin-off for McLovin: {s['hypothesis']}  ({s['why']})")
+    print(f"\nstory {result['story_id']}: {result['final']['status'].upper()}  {result['final'].get('article') or result['final'].get('note', '')}")
+    if result.get("checks"):
+        print("rubric flags: " + "; ".join(result["checks"]))
+
+
+def _desk(args) -> None:
+    from .desk import get_desk
+    desk = get_desk()
+    print(f"desk: {type(desk).__name__}")
+    if args.show:
+        record = desk.get(args.show)
+        print(json.dumps(record, indent=1, ensure_ascii=False, default=str) if record else f"no desk record {args.show}")
+        return
+    rows = desk.recent(limit=args.limit, status=args.status)
+    for r in rows:
+        subs = r.get("sub_hypotheses") or []
+        held = sum(s.get("status") in ("supported", "disputed") for s in subs)
+        print(f"{r.get('updated_at', '')[:16]}  {r.get('status', ''):<10} {r.get('stage', ''):<20} "
+              f"{held}/{len(subs)} supported  {r['_id']}\n    {r.get('hypothesis', '')[:110]}")
+    if not rows:
+        print("nothing on the desk yet: run `try reporter` first")
 
 
 # --- articles ------------------------------------------------------------------------------------
@@ -247,13 +289,22 @@ def _articles(args) -> None:
 # --- scout -------------------------------------------------------------------------------------
 
 def _scout(args) -> None:
-    findings = scout.research(args.hypothesis, args.context, args.budget)
+    from . import scout_agent
+    task = {"id": "H1", "statement": args.hypothesis, "assignment": {}}
+    out = scout_agent.run(task, budget=args.budget, context=args.context, say=print)
+    findings, report = out["findings"], out["report"]
+    print()
     for f in findings:
         print(f"[{f.get('finding')}] {f.get('source_type', '')}  {f.get('url', '')}\n   \"{str(f.get('quote', ''))[:200]}\""
               + (f"\n   {f['note']}" if f.get("note") else ""))
     tally = {k: sum(f.get("finding") == k for f in findings) for k in ("supports", "contradicts", "unclear")}
-    print(f"\n{len(findings)} findings: {tally}")
-    print(f"saved {_save('scout', 'findings.json', {'hypothesis': args.hypothesis, 'findings': findings})}")
+    print(f"\n{len(findings)} findings: {tally} in {out['used']} calls")
+    print(f"REPORT: {report.get('verdict', '').upper()} ({report.get('confidence', '?')})  {report.get('summary', '')}"
+          + (f"\n  held back: {report['held_back']}" if report.get("held_back") else "")
+          + "".join(f"\n  not found: {x}" for x in report.get("not_found", []))
+          + "".join(f"\n  proposes: {p.get('hypothesis')}" for p in report.get("proposals", []))
+          + (f"\n  next check: {report['next_check']}" if report.get("next_check") else ""))
+    print(f"saved {_save('scout', 'findings.json', {'hypothesis': args.hypothesis, **out})}")
 
 
 # --- council -----------------------------------------------------------------------------------

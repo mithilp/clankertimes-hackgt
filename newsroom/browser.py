@@ -23,10 +23,14 @@ from bs4 import BeautifulSoup
 from . import config
 
 MAX_TEXT = 200_000
-# (engine url template, result selector, link selector, snippet selector)
+# (engine url template, result selector, link selector, snippet selector, title selector or None for the link text)
+# Brave's web page first: Bing serves headless browsers degraded, generic results on some machines (the
+# query check below catches that), and each engine that fails costs a page load.
 _ENGINES = [
-    ("https://www.bing.com/search?q={q}&count={n}", "li.b_algo", "h2 a", ".b_caption p, .b_algoSlug"),
-    ("https://html.duckduckgo.com/html/?q={q}", ".result, .web-result", "a.result__a", ".result__snippet"),
+    ("https://search.brave.com/search?q={q}", "div.snippet[data-type=web]", "a[href^=http]", ".content",
+     ".search-snippet-title"),
+    ("https://www.bing.com/search?q={q}&count={n}", "li.b_algo", "h2 a", ".b_caption p, .b_algoSlug", None),
+    ("https://html.duckduckgo.com/html/?q={q}", ".result, .web-result", "a.result__a", ".result__snippet", None),
 ]
 _BLOCK_MARKERS = ("captcha", "are you a robot", "verify you are human", "unusual traffic", "cf-challenge",
                   "access denied", "permission to access", "just a moment")
@@ -114,7 +118,7 @@ _browser = _Browser()
 def search(query: str, count: int = 10) -> list[dict]:
     """Same shape as web.search: [{title, url, description}]."""
     last_error = None
-    for template, result_sel, link_sel, snippet_sel in _ENGINES:
+    for template, result_sel, link_sel, snippet_sel, title_sel in _ENGINES:
         url = template.format(q=urllib.parse.quote_plus(query), n=max(count, 10))
         try:
             html = _browser.html(url)
@@ -122,7 +126,7 @@ def search(query: str, count: int = 10) -> list[dict]:
         except Blocked as e:
             last_error = e
             continue
-        results = _parse(html, result_sel, link_sel, snippet_sel, count)
+        results = _parse(html, result_sel, link_sel, snippet_sel, count, title_sel)
         host = urllib.parse.urlparse(url).hostname
         if not results:
             last_error = BrowserError(f"no results parsed from {host}")
@@ -153,7 +157,7 @@ def _matches_query(query: str, results: list[dict]) -> bool:
                for r in results[:5])
 
 
-def _parse(html: str, result_sel: str, link_sel: str, snippet_sel: str, count: int) -> list[dict]:
+def _parse(html: str, result_sel: str, link_sel: str, snippet_sel: str, count: int, title_sel: str | None = None) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     results, seen = [], set()
     for block in soup.select(result_sel):
@@ -165,8 +169,9 @@ def _parse(html: str, result_sel: str, link_sel: str, snippet_sel: str, count: i
             continue
         seen.add(url)
         snippet = block.select_one(snippet_sel)
+        title = block.select_one(title_sel) if title_sel else None
         results.append({
-            "title": link.get_text(" ", strip=True),
+            "title": (title or link).get_text(" ", strip=True),
             "url": url,
             "description": snippet.get_text(" ", strip=True) if snippet else "",
         })

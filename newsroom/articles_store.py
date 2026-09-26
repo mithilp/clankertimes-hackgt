@@ -25,6 +25,9 @@ SAMPLES = Path(__file__).resolve().parent.parent / "web" / "data" / "sample-arti
 # Fixed when the collection is created. The site filters on status and beats and sorts by published_ts.
 INDEXED = ["slug", "status", "beats", "published_ts", "sample"]
 KIND = {"record": "record", "data": "data", "news": "news", "gov": "record", "court": "record", "web": "web page"}
+# The scouts' source types, as the site names them.
+KIND.update({"government_record": "record", "court_record": "record", "news_report": "news",
+             "company_statement": "company", "complaint": "complaint", "social": "post", "other": "web page"})
 
 
 def _ts(iso: str) -> datetime:

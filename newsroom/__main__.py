@@ -83,6 +83,15 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("story_id", type=int)
 
     sub.add_parser("stories", help="list stories and their status")
+
+    p = sub.add_parser("pipeline", help="McLovin's results -> Reporter -> Scouts -> Skeptic + Virality -> the website")
+    p.add_argument("--limit", type=int, default=1, help="McLovin results to work this pass")
+    p.add_argument("--budget", type=int, default=10, help="base scout budget: calls per scout per assignment")
+    p.add_argument("--from", dest="kind", choices=["auto", "astra", "file"], default="auto",
+                   help="where McLovin's results are: Astra (mclov_results) or runs/mclovin/ files")
+    p.add_argument("--loop", type=float, metavar="MINUTES", help="keep running a pass every N minutes")
+    p.add_argument("--dry-run", action="store_true", help="list what would be worked; no model calls")
+    p.add_argument("--peek", action="store_true", help="print a few raw McLovin documents and how the reporter reads them")
     sub.add_parser("usage", help="DeepSeek tokens used so far")
 
     tryit.add_parser(sub)
@@ -91,6 +100,9 @@ def main(argv: list[str] | None = None) -> None:
     if args.command == "try":
         sys.stdout.reconfigure(encoding="utf-8")
         return tryit.main(args)
+    if args.command == "pipeline":
+        sys.stdout.reconfigure(encoding="utf-8")
+        return _pipeline(args)
     settings = config.load()
     sys.stdout.reconfigure(encoding="utf-8")  # Windows terminals otherwise garble curly quotes
     with db.session() as conn:
@@ -153,13 +165,35 @@ def main(argv: list[str] | None = None) -> None:
                 print(f"{u['model']}: {u['calls']} calls, {u['prompt']} prompt tokens, {u['completion']} completion tokens")
 
 
+def _pipeline(args) -> None:
+    from . import pipeline
+    settings = config.load()
+    print(f"[pipeline] model: {settings.llm_provider} ({settings.fast_model} / {settings.smart_model})"
+          f" · search: {settings.search_backend}")
+    if args.peek:
+        src = pipeline.source(args.kind)
+        for doc in (src.sample(3) if hasattr(src, "sample") else src.results(3)):
+            print(json.dumps(doc, indent=1, ensure_ascii=False, default=str)[:2500])
+            print("  -> reporter reads it as:", json.dumps(pipeline.from_mclovin(doc), ensure_ascii=False, default=str)[:800], "\n")
+        return
+    kw = dict(limit=args.limit, budget=args.budget, kind=args.kind, dry_run=args.dry_run)
+    if args.loop:
+        pipeline.loop(args.loop, **kw)
+    else:
+        pipeline.run(**kw)
+
+
 def show(conn, story_id: int) -> None:
     story = conn.execute("select * from stories where id = ?", (story_id,)).fetchone()
     if story is None:
         sys.exit(f"no story {story_id}")
     counts = json.loads(story["counts"])
     print(f"Story {story_id}: {story['status']}\n{story['product']} ({story['company']}): {story['label']}")
-    print(f"{counts['total']} people ({counts['last_90']} in last 90 days, {counts['severe']} severe), as of {counts['as_of']}")
+    if "total" in counts:
+        print(f"{counts['total']} people ({counts['last_90']} in last 90 days, {counts['severe']} severe), as of {counts['as_of']}")
+    else:  # a McLovin hypothesis worked by the reporter agent
+        print(f"McLovin hypothesis {counts.get('hypothesis_id')}: {len(counts.get('signal_ids') or [])} signals, "
+              f"{counts.get('distinct_origins') or '?'} distinct origins")
     if story["angle"]:
         print(f"Angle: {story['angle']}")
     for h in conn.execute("select * from hypotheses where story_id = ? order by n", (story_id,)):

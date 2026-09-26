@@ -10,8 +10,8 @@ The governing rule, from Mark Lee Hunter's *Story-Based Inquiry* (UNESCO's inves
 2. **Set the minimum and maximum story.** The minimum is a story worth publishing even if the full hypothesis doesn't hold. The maximum is what's true if it holds and more follows. Knowing both tells you when you're done.
 3. **Write the evidence plan.** The ranked list of sources that could settle the hypothesis. "Done" is measured against this plan.
 4. **Check prior coverage.** What has already been reported, and by whom. Credit it; never rewrite it as ours.
-5. **Find the gap.** What nobody has established. Everything after this points at the gap.
-6. **Break the hypothesis into sub-hypotheses and assign scouts.** 3–5 plain statements that must all be true for the story to hold, each checkable on the public web. One scout per sub-hypothesis.
+5. **Find the gap.** What nobody has established. Everything after this points at the gap. This newsroom publishes only what no outlet has: a record nobody pulled, a number nobody computed, a connection nobody drew, an official claim the record contradicts, or what changed since the last coverage. If there's no gap, there's no story: spike it and say so.
+6. **Break the hypothesis into sub-hypotheses and assign scouts.** As many plain statements as the story needs (usually 3–5; every one costs a scout), each checkable on the public web. Mark which ones the minimum story needs. At least one should rule out an innocent explanation (see "exclude the alternatives" below). One scout per sub-hypothesis, each with a direction: which records to try first, and what finding would contradict it.
 7. **Read what comes back, and decide.**
 
 ## Managing scouts

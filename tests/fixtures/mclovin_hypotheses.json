@@ -1,0 +1,26 @@
+{
+ "_note": "Constructed McLovin handoff, for running the reporter before McLovin is wired up. Same shape as runs/mclovin/<ts>/hypotheses.json. The hypotheses are real questions to check, not claims that they are true.",
+ "hypotheses": [
+  {
+   "id": "h-fixture0001",
+   "hypothesis": "NHTSA has an open investigation into loss of steering control on the 2023 Tesla Model 3.",
+   "why_now": "Owners keep reporting sudden steering loss on the 2023 Model 3 to NHTSA.",
+   "who_would_know": ["NHTSA Office of Defects Investigation", "Tesla"],
+   "would_settle_it": ["NHTSA defect investigations file (INV_*), 2023-2026, for 2023 Tesla Model 3",
+                       "NHTSA recalls by vehicle for the 2023 Tesla Model 3", "Tesla Part 573 defect reports"],
+   "accountable_party": "Tesla",
+   "evidence_so_far": {"signal_ids": [], "distinct_origins": 0, "sources": 0},
+   "problems": []
+  },
+  {
+   "id": "h-fixture0002",
+   "hypothesis": "The FDA has issued a recall for infusion pumps that deliver the whole bag at once.",
+   "why_now": "Device reports in MAUDE describe free-flow over-infusion.",
+   "who_would_know": ["FDA CDRH", "the pump manufacturers"],
+   "would_settle_it": ["openFDA device recall records for product code FRN, 2024-2026", "FDA MAUDE reports for FRN"],
+   "accountable_party": "infusion pump manufacturers",
+   "evidence_so_far": {"signal_ids": [], "distinct_origins": 0, "sources": 0},
+   "problems": []
+  }
+ ]
+}

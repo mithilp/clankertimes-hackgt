@@ -5,7 +5,7 @@ Score each completed story run (published, killed or parked).
 ## Hard checks
 - [ ] An evidence plan was written before scouts were sent
 - [ ] Prior coverage was checked and is credited in the draft if it exists
-- [ ] 3–5 sub-hypotheses, each assigned to a scout
+- [ ] Sub-hypotheses sized to the story (usually 3–5, at most 8), each assigned to a scout, at least one testing an innocent explanation
 - [ ] Every new hypothesis a scout proposed was either granted with a named reason or declined
 - [ ] Killed or parked stories have a kill memo: what was checked, what was found, what would change the verdict
 - [ ] Every sentence in a draft cites a source, and every quote is found verbatim in its source
