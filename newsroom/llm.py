@@ -15,6 +15,7 @@ import anthropic
 from pydantic import BaseModel
 
 from . import db
+from .config import settings
 
 log = logging.getLogger(__name__)
 client = anthropic.AsyncAnthropic(max_retries=6)
@@ -37,6 +38,9 @@ def _request_kwargs(model: str) -> dict:
 
 async def structured(agent: str, model: str, system: str, prompt: str, schema: type[T], *, effort: str = "medium") -> T:
     """One call, validated JSON out."""
+    if settings.provider == "gemini":
+        from . import gemini
+        return await gemini.structured(agent, model, system, prompt, schema, effort=effort)
     kwargs = _request_kwargs(model)
     if not model.startswith("claude-haiku"):
         kwargs["output_config"] = {"effort": effort}
@@ -137,6 +141,10 @@ async def run_agent(
     heartbeat: Callable[[], Awaitable[bool]] | None = None,
 ) -> str:
     """Manual tool loop. Returns the final assistant text."""
+    if settings.provider == "gemini":
+        from . import gemini
+        return await gemini.run_agent(ctx, model=model, system=system, task=task, tools=tools, max_turns=max_turns,
+                                      effort=effort, on_turn=on_turn, heartbeat=heartbeat)
     by_name = {t.name: t for t in tools}
     messages: list[dict] = [{"role": "user", "content": task}]
     kwargs = _request_kwargs(model)

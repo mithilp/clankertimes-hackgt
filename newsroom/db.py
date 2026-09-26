@@ -13,6 +13,7 @@ import contextlib
 import hashlib
 import json
 import logging
+import os
 from typing import Any, AsyncIterator
 from urllib.parse import urlsplit, urlunsplit
 
@@ -93,7 +94,13 @@ async def upsert_source(url: str, seen_by: str) -> tuple[Any, bool]:
 
 
 async def record_usage(agent: str, model: str, usage: Any) -> None:
-    price_in, price_out = PRICES.get(model, PRICES["claude-opus-5"])
+    if model in PRICES:
+        price_in, price_out = PRICES[model]
+    elif model.startswith("gemini"):
+        # AI Studio free tier costs nothing; set real prices here if you move to a paid tier.
+        price_in, price_out = float(os.getenv("GEMINI_PRICE_IN", 0)), float(os.getenv("GEMINI_PRICE_OUT", 0))
+    else:
+        price_in, price_out = PRICES["claude-opus-5"]  # unknown model: assume the most expensive
     cache_read = getattr(usage, "cache_read_input_tokens", 0) or 0
     cache_write = getattr(usage, "cache_creation_input_tokens", 0) or 0
     cost = (

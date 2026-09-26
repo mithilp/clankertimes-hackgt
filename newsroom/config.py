@@ -39,6 +39,9 @@ PRICES = {
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql://newsroom:newsroom@localhost:5432/newsroom")
     brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
+    # "anthropic" (default) or "gemini" (Google AI Studio; set MODEL_* to Gemini model ids).
+    provider: str = os.getenv("LLM_PROVIDER", "anthropic")
+    gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
     archive_dir: Path = Path(os.getenv("ARCHIVE_DIR", "./archive"))
     beats_file: Path = Path(os.getenv("BEATS_FILE", "./config/beats.json"))
     worker_id: str = os.getenv("WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")
