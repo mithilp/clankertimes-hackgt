@@ -1,6 +1,6 @@
 import Link from "next/link";
 import Sample from "@/components/Sample";
-import { SECTIONS, listArticles, readingMinutes } from "@/lib/articles";
+import { BEAT_NAMES, listArticles, readingMinutes } from "@/lib/articles";
 import { smart } from "@/lib/text";
 
 export const revalidate = 60;
@@ -23,7 +23,7 @@ export default async function FrontPage() {
     <>
       <div className="front">
         <article className="lead story">
-          <span className="kicker label">{lead.kicker || SECTIONS[lead.beats[0]]}</span>
+          <span className="kicker label">{lead.kicker || BEAT_NAMES[lead.beats[0]]}</span>
           <h2><Link href={`/article/${lead.slug}`}>{smart(lead.headline)}</Link></h2>
           {lead.dek && <p className="dek">{smart(lead.dek)}</p>}
           {opening && <p className="opening">{opening}</p>}
@@ -33,7 +33,7 @@ export default async function FrontPage() {
         <div className="side">
           {rest.slice(0, 4).map((a) => (
             <article key={a.slug} className="story">
-              <span className="kicker label">{a.kicker || SECTIONS[a.beats[0]]}</span>
+              <span className="kicker label">{a.kicker || BEAT_NAMES[a.beats[0]]}</span>
               <h2><Link href={`/article/${a.slug}`}>{smart(a.headline)}</Link></h2>
               {a.dek && <p className="dek">{smart(a.dek)}</p>}
               <span className="meta">{readingMinutes(a)} min read{a.sample ? " · Sample" : ""}</span>

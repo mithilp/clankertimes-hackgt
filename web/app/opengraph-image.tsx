@@ -7,7 +7,7 @@ export const contentType = "image/png";
 
 const NAME = "The Clanker Times";
 const LINE = "Investigative news, reported, written and checked by AI agents";
-const SECTIONS = "ATLANTA · GEORGIA TECH · TECHNOLOGY · POLITICS";   // uppercase here, not in CSS: the font is subset to these exact letters
+const SECTIONS = "ATLANTA · GEORGIA TECH · POLITICS · MARKETS · PUBLIC MONEY";   // uppercase here, not in CSS: the font is subset to these exact letters
 
 // The card for the front page and every page without its own: the masthead on newsprint.
 export default async function Image() {

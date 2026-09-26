@@ -1,5 +1,5 @@
 import { ImageResponse } from "next/og";
-import { SECTIONS, formatDate, getArticle, sourceOrder } from "@/lib/articles";
+import { BEAT_NAMES, formatDate, getArticle, sourceOrder } from "@/lib/articles";
 import { INK, MUTED, PAPER, RULE, cardFonts } from "@/lib/og";
 import { smart } from "@/lib/text";
 
@@ -12,7 +12,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const { slug } = await params;
   const article = await getArticle(slug);
   const headline = smart(article?.headline ?? "The Clanker Times");
-  const section = (article && (SECTIONS[article.beats[0]] ?? "")) || "";
+  const section = (article && (BEAT_NAMES[article.beats[0]] ?? "")) || "";
   const kicker = [section, article?.kicker].filter(Boolean).join(" · ").toUpperCase();
   const foot = article
     ? `${formatDate(article.published_at)} · ${sourceOrder(article).length} sources cited${article.sample ? " · Sample article" : ""}`

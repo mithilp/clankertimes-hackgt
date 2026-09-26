@@ -44,8 +44,19 @@ const samples = sampleData as unknown as Article[];
 export const SECTIONS: Record<string, string> = {
   atlanta: "Atlanta",
   "georgia-tech": "Georgia Tech",
-  tech: "Technology",
   "us-politics": "Politics",
+  markets: "Markets",
+  banking: "Banking",
+  "public-money": "Public Money",
+  tech: "Technology",
+};
+
+// Every beat's name, including beats without their own section, for kickers.
+export const BEAT_NAMES: Record<string, string> = {
+  ...SECTIONS,
+  "ai-industry": "Artificial Intelligence",
+  "product-safety": "Product Safety",
+  "higher-ed": "Higher Education",
 };
 
 const FIELDS = [

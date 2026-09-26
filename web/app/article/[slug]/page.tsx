@@ -5,7 +5,7 @@ import Sample from "@/components/Sample";
 import Share from "@/components/Share";
 import Timeline from "@/components/Timeline";
 import { AUTHOR, OG_BASE, SITE_NAME, absolute } from "@/lib/site";
-import { SECTIONS, formatDate, getArticle, readingMinutes, sourceOrder } from "@/lib/articles";
+import { BEAT_NAMES, SECTIONS, formatDate, getArticle, readingMinutes, sourceOrder } from "@/lib/articles";
 import { smart } from "@/lib/text";
 
 export const revalidate = 60;
@@ -26,7 +26,7 @@ export async function generateMetadata({ params }: PageProps<"/article/[slug]">)
     openGraph: {
       ...OG_BASE, type: "article", url: path, title: article.headline, description: article.dek,
       publishedTime: article.published_at, modifiedTime: updated, authors: [AUTHOR],
-      section: SECTIONS[article.beats[0]], tags: [article.kicker, ...article.beats.map((b) => SECTIONS[b])].filter(Boolean),
+      section: BEAT_NAMES[article.beats[0]], tags: [article.kicker, ...article.beats.map((b) => BEAT_NAMES[b])].filter(Boolean),
     },
     twitter: { card: "summary_large_image", title: article.headline, description: article.dek },
   };
@@ -39,7 +39,7 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
 
   const order = sourceOrder(article);
   const number = (id: string) => order.indexOf(id) + 1;
-  const section = article.beats[0];
+  const section = article.beats.find((b) => b in SECTIONS);
   const url = absolute(`/article/${article.slug}`);
   const jsonLd = {
     "@context": "https://schema.org",
@@ -52,7 +52,7 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
     author: { "@type": "Organization", name: AUTHOR, url: absolute("/about") },
     publisher: { "@type": "Organization", name: SITE_NAME, logo: { "@type": "ImageObject", url: absolute("/apple-icon") } },
     mainEntityOfPage: url,
-    articleSection: SECTIONS[section],
+    articleSection: BEAT_NAMES[article.beats[0]],
     isAccessibleForFree: true,
     citation: order.map((id) => article.sources[id].url),
   };
