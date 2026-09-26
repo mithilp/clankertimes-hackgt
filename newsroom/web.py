@@ -51,15 +51,15 @@ def fetch_text(url: str) -> str:
     """The readable text of a page or PDF, or "" if it can't be fetched."""
     with db.session() as conn:
         row = conn.execute("select text from pages where url = ?", (url,)).fetchone()
-    if row:
-        return row["text"]
+    if row and not (urlparse(url).hostname == "news.google.com" and len(row["text"]) < 500):
+        return row["text"]      # (a tiny cached Google News page is its redirect stub, not the article)
     if config.load().search_backend == "browser" and not urlparse(url).path.lower().endswith(".pdf"):
         # The browser renders JS and gets past plain-HTTP blocks; fall through to httpx if it fails.
         # PDFs go straight to httpx: in a browser they start a download instead of opening.
         from . import browser
         try:
             text = browser.fetch_text(url)
-            if text:
+            if text and not (urlparse(url).hostname == "news.google.com" and len(text) < 500):
                 remember(url, text)
                 return text
         except browser.Blocked:
