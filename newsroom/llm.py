@@ -100,6 +100,7 @@ class AgentContext:
     agent: str
     story_id: Any = None
     lead_id: Any = None
+    sub_claim_id: Any = None
     done: bool = False
     outcome: str | None = None
     scratch: dict = field(default_factory=dict)
@@ -118,7 +119,7 @@ async def _run_tool(ctx: AgentContext, tool: Tool, tool_input: dict) -> tuple[st
         result, is_error = f"Error: {type(e).__name__}: {e}", True
     await db.log_tool_call(
         ctx.agent, tool.name, reason, tool_input,
-        story_id=ctx.story_id, lead_id=ctx.lead_id, result_summary=result[:500],
+        story_id=ctx.story_id, sub_claim_id=ctx.sub_claim_id, lead_id=ctx.lead_id, result_summary=result[:500],
         source_id=source_id, duration_ms=int((time.monotonic() - started) * 1000),
         billable=tool.billable,
     )

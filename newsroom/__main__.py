@@ -2,9 +2,10 @@
 
 Roles:
   initdb    apply db/schema.sql if the database is empty (idempotent)
-  scout     all beats, in parallel (one advisory lock per beat)
+  tipster   all beats, in parallel (one advisory lock per beat); raises hypotheses
   editor    managing editor (singleton; extra replicas wait as standbys)
-  reporter  REPORTER_CONCURRENCY story slots
+  reporter  REPORTER_CONCURRENCY slots: plans hypotheses into sub-claims, writes stories
+  scout     SCOUT_CONCURRENCY slots: each researches one sub-claim
   reviewer  REVIEWER_CONCURRENCY review slots, three reviewers each
   all       every role in one process, for local development
 """
@@ -16,10 +17,11 @@ from pathlib import Path
 
 import asyncpg
 
-from . import editor, reporter, reviewer, scout
+from . import editor, reporter, reviewer, scout, tipster
 from .config import settings
 
-ROLES = {"scout": scout.main, "editor": editor.main, "reporter": reporter.main, "reviewer": reviewer.main}
+ROLES = {"tipster": tipster.main, "editor": editor.main, "reporter": reporter.main, "scout": scout.main,
+         "reviewer": reviewer.main}
 
 
 async def initdb() -> None:

@@ -35,11 +35,13 @@ opinion on (the verifier lists every claim)."""
 ROLES = {
     "verifier": (settings.models.verifier, COMMON + """
 
-Your job: does each quoted excerpt actually support its sentence as written? Block if any sentence overstates its
-source, adds facts not in the excerpt, or misattributes. Numbers, dates and names must match exactly. Also block
-(and mark the claim unsupported) any claim that alleges wrongdoing by a named private individual, or that states
-something about an official or organization without attributing it to the record. List a claim_check for every
-claim."""),
+Your job: does each quoted excerpt, read with its context, support its sentence exactly as written? Check every
+name, title, number, date and qualifier in the sentence ("no", "only", "all", "first", "found"): each one must
+appear in the quote or its context. A true-sounding detail that is not in the cited text makes the claim
+unsupported, even if it is probably correct. Also mark unsupported any claim that alleges wrongdoing by a named
+private individual, or that states something about an official or organization without attributing it to the
+record. Block if any claim is unsupported, or if the headline says more than the claims do. List a claim_check
+for every claim."""),
     "skeptic": (settings.models.skeptic, COMMON + """
 
 Your job: try to kill the story. Look for innocent explanations the draft ignores, missing context (was this
@@ -65,7 +67,7 @@ async def packet(story) -> str:
         lines.append(f"[{c['position']}] {c['text']}\n    source: {c['url']}\n    quote: \"{c['quoted_span']}\"\n"
                      f"    context: ...{web.span_context(c['url'], c['quoted_span'])}...")
     contradicting = [f["fact"] for f in facts if f["bearing"] == "contradicts"]
-    lines.append("\nFacts the reporter recorded that cut against the story:\n"
+    lines.append("\nFacts the scouts recorded that cut against the story:\n"
                  + ("\n".join(f"- {f}" for f in contradicting) or "- none"))
     return "\n".join(lines)
 
@@ -111,13 +113,8 @@ async def review_story(story, worker: str) -> None:
     if not blocks:
         await db.release(sid, worker, status="approved")
     elif rnd == 0:
-        # One rework pass, with a fresh half-budget so the reporter can address the blocks.
-        await p.execute(
-            """update budgets set tool_calls_granted = tool_calls_used + $2, started_at = now(),
-                      wall_clock_granted = make_interval(mins => $3) where story_id = $1""",
-            sid, settings.base_tool_calls // 2, settings.base_minutes,
-        )
-        await db.release(sid, worker, status="assigned", review_round=1)
+        # One rework pass: the writer redrafts from the same facts with the reviewers' reasons.
+        await db.release(sid, worker, status="drafting", review_round=1)
     else:
         memo = "Blocked twice by the review panel. " + " ".join(f"{role}: {r.reason}" for role, r in blocks)
         await db.release(sid, worker, status="dormant", resolution="unresolved", kill_memo=memo)

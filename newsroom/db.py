@@ -37,7 +37,7 @@ async def pool() -> asyncpg.Pool:
 
 
 # Every lead column except the embedding (fetched rows don't need it).
-LEAD_COLS = ("id, scout, beat, hypothesis, why_now, why_now_at, who_would_know, would_settle_it, score, "
+LEAD_COLS = ("id, tipster, beat, hypothesis, why_now, why_now_at, who_would_know, would_settle_it, score, "
              "score_components, score_reason, fingerprint, status, duplicate_of, created_at")
 
 
@@ -49,26 +49,29 @@ def vec(embedding: list[float]) -> str:
 # --- trail -------------------------------------------------------------------------------
 
 
-async def event(agent: str, action: str, reason: str, *, story_id=None, lead_id=None, detail: Any = None) -> None:
+async def event(agent: str, action: str, reason: str, *, story_id=None, lead_id=None, sub_claim_id=None,
+                detail: Any = None) -> None:
     p = await pool()
     await p.execute(
-        "insert into agent_events (agent, action, reason, story_id, lead_id, detail) values ($1,$2,$3,$4,$5,$6)",
-        agent, action, reason, story_id, lead_id, detail,
+        """insert into agent_events (agent, action, reason, story_id, sub_claim_id, lead_id, detail)
+           values ($1,$2,$3,$4,$5,$6,$7)""",
+        agent, action, reason, story_id, sub_claim_id, lead_id, detail,
     )
     log.info("[%s] %s: %s", agent, action, reason)
 
 
 async def log_tool_call(
     agent: str, tool: str, reason: str, tool_input: dict, *,
-    story_id=None, lead_id=None, result_summary: str | None = None, source_id=None,
+    story_id=None, sub_claim_id=None, lead_id=None, result_summary: str | None = None, source_id=None,
     duration_ms: int | None = None, billable: bool = True,
 ) -> int:
     p = await pool()
     return await p.fetchval(
-        """insert into tool_calls (agent, story_id, lead_id, tool, reason, input, result_summary, source_id,
-                                   duration_ms, billable)
-           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) returning id""",
-        agent, story_id, lead_id, tool, reason, tool_input, result_summary, source_id, duration_ms, billable,
+        """insert into tool_calls (agent, story_id, sub_claim_id, lead_id, tool, reason, input, result_summary,
+                                   source_id, duration_ms, billable)
+           values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) returning id""",
+        agent, story_id, sub_claim_id, lead_id, tool, reason, tool_input, result_summary, source_id, duration_ms,
+        billable,
     )
 
 
@@ -127,49 +130,64 @@ async def over_budget() -> bool:
 
 
 # --- leases ------------------------------------------------------------------------------
+# Stories and sub-claims are both leased: any number of workers claim rows with
+# FOR UPDATE SKIP LOCKED, and a background task renews the lease while the work runs.
+
+_STATUS_TYPE = {"stories": "story_status", "sub_claims": "sub_claim_status"}
 
 
-async def claim_story(statuses: list[str], new_status: str, owner: str) -> asyncpg.Record | None:
-    """Claim one unleased story in any of `statuses` or `new_status` (the latter = a crashed worker's story).
+def _table(table: str) -> str:
+    if table not in _STATUS_TYPE:
+        raise ValueError(f"not a leased table: {table}")
+    return table
+
+
+async def claim(statuses: list[str], new_status: str, owner: str, *, table: str = "stories") -> asyncpg.Record | None:
+    """Claim one unleased row in any of `statuses` or `new_status` (the latter = a crashed worker's row).
 
     Safe under any number of concurrent workers: SKIP LOCKED means each candidate row goes to
     exactly one claimant, and nobody blocks waiting on a row someone else is claiming.
     """
+    t = _table(table)
     p = await pool()
     return await p.fetchrow(
         f"""
-        update stories s set status = ($2::text)::story_status, lease_owner = $3,
+        update {t} x set status = ($2::text)::{_STATUS_TYPE[t]}, lease_owner = $3,
                lease_expires_at = now() + make_interval(secs => {settings.lease_seconds})
-        where s.id = (
-          select id from stories
+        where x.id = (
+          select id from {t}
           where (status::text = any($1::text[]) or status::text = $2::text)
             and (lease_expires_at is null or lease_expires_at < now())
           order by updated_at
           for update skip locked
           limit 1
         )
-        returning s.*""",
+        returning x.*""",
         statuses, new_status, owner,
     )
 
 
-async def heartbeat(story_id, owner: str) -> bool:
+async def claim_story(statuses: list[str], new_status: str, owner: str) -> asyncpg.Record | None:
+    return await claim(statuses, new_status, owner, table="stories")
+
+
+async def heartbeat(row_id, owner: str, *, table: str = "stories") -> bool:
     """Extend the lease. False means we lost it (expired and reclaimed) and must stop."""
     p = await pool()
     res = await p.execute(
-        f"""update stories set lease_expires_at = now() + make_interval(secs => {settings.lease_seconds})
+        f"""update {_table(table)} set lease_expires_at = now() + make_interval(secs => {settings.lease_seconds})
             where id = $1 and lease_owner = $2""",
-        story_id, owner,
+        row_id, owner,
     )
     return res.endswith(" 1")
 
 
 @contextlib.asynccontextmanager
-async def lease_keeper(story_id, owner: str) -> AsyncIterator[dict]:
+async def lease_keeper(row_id, owner: str, *, table: str = "stories") -> AsyncIterator[dict]:
     """Renew the lease in the background for as long as the work runs.
 
     Renewal must not depend on the agent loop: a single model call can sit in rate-limit
-    retries for minutes, and a lapsed lease hands the story to a second worker.
+    retries for minutes, and a lapsed lease hands the work to a second worker.
     Yields {"held": bool}; it flips to False if the lease is lost.
     """
     state = {"held": True}
@@ -178,9 +196,9 @@ async def lease_keeper(story_id, owner: str) -> AsyncIterator[dict]:
         while True:
             await asyncio.sleep(settings.lease_seconds / 3)
             try:
-                if not await heartbeat(story_id, owner):
+                if not await heartbeat(row_id, owner, table=table):
                     state["held"] = False
-                    log.warning("lease on %s lost by %s", story_id, owner)
+                    log.warning("lease on %s %s lost by %s", table, row_id, owner)
                     return
             except Exception as e:  # noqa: BLE001 - a DB blip shouldn't kill the renewer
                 log.warning("lease renewal failed (%s); retrying", e)
@@ -192,15 +210,15 @@ async def lease_keeper(story_id, owner: str) -> AsyncIterator[dict]:
         task.cancel()
 
 
-async def release(story_id, owner: str, **fields: Any) -> bool:
+async def release(row_id, owner: str, *, table: str = "stories", **fields: Any) -> bool:
     """Write final fields and drop the lease, only if we still hold it."""
     p = await pool()
     cols = list(fields)
     sets = ", ".join(f"{c} = ${i + 3}" for i, c in enumerate(cols))
     sets = (sets + ", " if sets else "") + "lease_owner = null, lease_expires_at = null"
     res = await p.execute(
-        f"update stories set {sets} where id = $1 and lease_owner = $2",
-        story_id, owner, *[fields[c] for c in cols],
+        f"update {_table(table)} set {sets} where id = $1 and lease_owner = $2",
+        row_id, owner, *[fields[c] for c in cols],
     )
     return res.endswith(" 1")
 

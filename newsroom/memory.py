@@ -56,6 +56,8 @@ async def _memory():
 
 
 async def recall(query: str, *, agent_id: str | None = None, k: int = 6) -> list[str]:
+    if not settings.memory_enabled:
+        return []
     filters = {"user_id": NEWSROOM, **({"agent_id": agent_id} if agent_id else {})}
     try:
         mem = await _memory()
@@ -68,6 +70,8 @@ async def recall(query: str, *, agent_id: str | None = None, k: int = 6) -> list
 
 async def remember(text: str, *, agent_id: str, kind: str) -> None:
     """kind: beat_note | kill_lesson | source_reliability | editorial_precedent."""
+    if not settings.memory_enabled:
+        return
     try:
         mem = await _memory()
         await asyncio.to_thread(

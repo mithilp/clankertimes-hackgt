@@ -8,6 +8,7 @@ import os
 from types import SimpleNamespace
 from typing import TypeVar
 
+import httpx
 from google import genai
 from google.genai import errors, types
 from pydantic import BaseModel
@@ -38,6 +39,12 @@ async def _generate(model: str, contents, config: types.GenerateContentConfig) -
         try:
             async with _slots:
                 return await client().aio.models.generate_content(model=model, contents=contents, config=config)
+        except httpx.TransportError as e:  # connection reset, read error, timeout
+            if attempt == 7:
+                raise
+            log.warning("gemini network error (%s); retrying in %.0fs", type(e).__name__, delay)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 120)
         except errors.APIError as e:
             if e.code == 429 and "PerDay" in str(e.details):
                 raise QuotaExhausted(f"{model}: daily free-tier quota used up") from e

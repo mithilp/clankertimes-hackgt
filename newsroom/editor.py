@@ -2,12 +2,11 @@
 
 Wakes on NOTIFY (new_lead, appeal, story_approved) within milliseconds and also sweeps every
 30 seconds, so nothing depends on a notification arriving. Mostly code; the model is called
-only to rule on budget appeals.
+only to confirm possible duplicates and to rule on scouts' budget appeals.
 """
 
 import logging
 import time
-from datetime import timedelta
 
 from pydantic import BaseModel
 
@@ -17,7 +16,7 @@ from .llm import structured
 
 log = logging.getLogger(__name__)
 AGENT = "managing-editor"
-ACTIVE = ("assigned", "reporting", "in_review", "approved")
+ACTIVE = ("assigned", "planning", "researching", "drafting", "writing", "in_review", "approved")
 
 
 # --- leads -------------------------------------------------------------------------------
@@ -75,19 +74,13 @@ async def same_hypothesis(lead, other) -> bool:
 async def promote(lead) -> None:
     p = await db.pool()
     score = float(lead["score"])
-    calls = settings.base_tool_calls + round(score * settings.extra_tool_calls)
-    minutes = settings.base_minutes + round(score * settings.extra_minutes)
     async with p.acquire() as conn, conn.transaction():
         claimed = await conn.execute("update leads set status = 'promoted' where id = $1 and status = 'new'",
                                      lead["id"])
         if claimed.endswith(" 0"):
             return
         story_id = await conn.fetchval("insert into stories (lead_id) values ($1) returning id", lead["id"])
-        await conn.execute(
-            "insert into budgets (story_id, tool_calls_granted, wall_clock_granted) values ($1,$2,$3)",
-            story_id, calls, timedelta(minutes=minutes),
-        )
-    await db.event(AGENT, "handoff", f"promoted at score {score:.2f}; budget {calls} calls / {minutes} min",
+    await db.event(AGENT, "handoff", f"promoted at score {score:.2f}; {lead['score_reason']}",
                    story_id=story_id, lead_id=lead["id"], detail={"hypothesis": lead["hypothesis"]})
 
 
@@ -100,38 +93,37 @@ class Ruling(BaseModel):
     reason: str
 
 
-APPEAL_SYSTEM = """You are the managing editor ruling on a reporter's request for more research budget.
-Grant only when the reporter names specific checks that could plausibly change the outcome and hasn't already
-hit diminishing returns on similar sources. "Keep looking" is a denial. A grant is 5-20 extra calls.
+APPEAL_SYSTEM = """You are the managing editor ruling on a scout's request for more research calls on one
+sub-claim. Grant only when the scout names specific checks that could plausibly change its verdict and hasn't
+already hit diminishing returns on similar sources. "Keep looking" is a denial. A grant is 3-10 extra calls.
 Your reason is shown publicly; one or two sentences."""
 
 
 async def decide_appeals() -> None:
     p = await db.pool()
     for appeal in await p.fetch("select * from budget_appeals where decision is null order by created_at"):
-        sid = appeal["story_id"]
+        sid, sub_id = appeal["story_id"], appeal["sub_claim_id"]
         granted_before = await p.fetchval(
-            "select count(*) from budget_appeals where story_id = $1 and decision = 'granted'", sid)
+            "select count(*) from budget_appeals where sub_claim_id = $1 and decision = 'granted'", sub_id)
         if granted_before >= settings.max_appeals_granted or await db.over_budget():
-            ruling = Ruling(grant=False, extra_calls=0, reason="This story has already had its extension.")
+            ruling = Ruling(grant=False, extra_calls=0, reason="This sub-claim has already had its extension.")
         else:
             ctx = await p.fetchrow(
-                """select l.hypothesis, b.tool_calls_used, b.tool_calls_granted,
-                          (select count(*) from facts f where f.story_id = s.id) as facts,
-                          (select count(*) from evidence_plan e where e.story_id = s.id and e.status = 'pending') as pending,
-                          (select count(*) from evidence_plan e where e.story_id = s.id) as planned
-                   from stories s join leads l on l.id = s.lead_id join budgets b on b.story_id = s.id
-                   where s.id = $1""", sid)
+                """select l.hypothesis, sc.claim, sc.core, sc.calls_used, sc.calls_granted,
+                          (select count(*) from facts f where f.sub_claim_id = sc.id) as facts
+                   from sub_claims sc join stories s on s.id = sc.story_id join leads l on l.id = s.lead_id
+                   where sc.id = $1""", sub_id)
             precedent = await memory.recall(f"budget appeal ruling {appeal['next_checks']}", agent_id=AGENT, k=3)
             prompt = (
-                f"Hypothesis: {ctx['hypothesis']}\nUsed {ctx['tool_calls_used']}/{ctx['tool_calls_granted']} calls; "
-                f"{ctx['facts']} facts recorded; {ctx['pending']}/{ctx['planned']} plan items unchecked.\n"
+                f"Hypothesis: {ctx['hypothesis']}\nSub-claim ({'core' if ctx['core'] else 'supporting'}): "
+                f"{ctx['claim']}\nUsed {ctx['calls_used']}/{ctx['calls_granted']} calls; "
+                f"{ctx['facts']} facts recorded.\n"
                 f"Requested: {appeal['extra_calls']} more calls.\nNext checks: {appeal['next_checks']}\n"
-                f"Why it could change the outcome: {appeal['why_could_change']}\n\n"
+                f"Why it could change the verdict: {appeal['why_could_change']}\n\n"
                 "Past rulings:\n" + ("\n".join(f"- {x}" for x in precedent) or "- none")
             )
             ruling = await structured(AGENT, settings.models.editor, APPEAL_SYSTEM, prompt, Ruling, effort="low")
-        extra = max(0, min(ruling.extra_calls, 20)) if ruling.grant else 0
+        extra = max(0, min(ruling.extra_calls, 10)) if ruling.grant else 0
         decision = "granted" if ruling.grant and extra else "denied"
         async with p.acquire() as conn, conn.transaction():
             await conn.execute(
@@ -139,12 +131,9 @@ async def decide_appeals() -> None:
                 appeal["id"], decision, ruling.reason,
             )
             if decision == "granted":
-                await conn.execute(
-                    """update budgets set tool_calls_granted = tool_calls_granted + $2,
-                              wall_clock_granted = wall_clock_granted + interval '10 minutes' where story_id = $1""",
-                    sid, extra,
-                )
-        await db.event(AGENT, f"appeal_{decision}", ruling.reason, story_id=sid)
+                await conn.execute("update sub_claims set calls_granted = calls_granted + $2 where id = $1",
+                                   sub_id, extra)
+        await db.event(AGENT, f"appeal_{decision}", ruling.reason, story_id=sid, sub_claim_id=sub_id)
         await memory.remember(f"Appeal {decision} ({appeal['next_checks']}): {ruling.reason}", agent_id=AGENT,
                               kind="editorial_precedent")
 
@@ -219,14 +208,16 @@ async def wake_dormant() -> None:
             if changed:
                 reason = f"watched page changed: {story['url']}"
         if reason and not await db.over_budget():
-            await p.execute(
-                """update budgets set tool_calls_granted = tool_calls_used + $2, started_at = now(),
-                          wall_clock_granted = make_interval(mins => $3) where story_id = $1""",
-                story["id"], settings.base_tool_calls // 2, settings.base_minutes,
+            # Reopen the parts that couldn't be settled; if none (e.g. parked by review), rewrite.
+            reopened = await p.execute(
+                """update sub_claims set status = 'pending', finding = null, calls_granted = calls_used + $2
+                   where story_id = $1 and status in ('not_found', 'gated')""",
+                story["id"], settings.sub_claim_calls,
             )
-            await p.execute("update stories set status = 'assigned', wake_at = null where id = $1 and status = 'dormant'",
-                            story["id"])
-            await db.event(AGENT, "woke", reason, story_id=story["id"])
+            next_status = "drafting" if reopened.endswith(" 0") else "researching"
+            await p.execute("update stories set status = ($2::text)::story_status, wake_at = null "
+                            "where id = $1 and status = 'dormant'", story["id"], next_status)
+            await db.event(AGENT, "woke", f"{reason} -> {next_status}", story_id=story["id"])
 
 
 # --- loop --------------------------------------------------------------------------------

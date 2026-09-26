@@ -79,7 +79,7 @@ async def _novelty(hypothesis: str, emb: list[float]) -> dict:
     except Exception:  # noqa: BLE001 - search outage shouldn't block scoring
         coverage = []
     embs = await asyncio.gather(*(memory.embed(f"{c['title']}. {c['snippet']}") for c in coverage))
-    covered = [c for c, e in zip(coverage, embs) if _cos(emb, e) > 0.75]
+    covered = [c for c, e in zip(coverage, embs) if _cos(emb, e) > settings.coverage_similarity]
     coverage_part = [1.0, 0.6, 0.35][len(covered)] if len(covered) < 3 else 0.15
 
     return {
@@ -94,7 +94,7 @@ def _timeliness(why_now_at: datetime | None) -> dict:
     if why_now_at is None:
         return {"value": 0.5, "reason": "trigger date unknown"}
     age_days = max(0.0, (datetime.now(timezone.utc) - why_now_at).total_seconds() / 86400)
-    return {"value": round(math.exp(-age_days / 10), 3), "reason": f"trigger is {age_days:.1f} days old"}
+    return {"value": round(math.exp(-age_days / settings.timeliness_days), 3), "reason": f"trigger is {age_days:.1f} days old"}
 
 
 async def score_lead(agent: str, lead: dict, why_now_at: datetime | None) -> dict:

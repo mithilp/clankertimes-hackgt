@@ -2,10 +2,11 @@
 # Everything restarts on crash and on VM reboot (enable the docker service on the VM).
 #
 # Parallelism:
-#   scout     one process runs every beat concurrently; a 2nd replica is a hot standby per beat
+#   tipster   one process runs every beat concurrently; a 2nd replica is a hot standby per beat
 #   editor    singleton by advisory lock; the 2nd replica takes over within ~15s if the first dies
-#   reporter  replicas x REPORTER_CONCURRENCY stories at once (default 2 x 3 = 6)
-#   reviewer  replicas x REVIEWER_CONCURRENCY stories at once, 3 reviewers each in parallel
+#   reporter  replicas x REPORTER_CONCURRENCY stories planned or written at once
+#   scout     replicas x SCOUT_CONCURRENCY sub-claims researched at once (the widest fan-out)
+#   reviewer  replicas x REVIEWER_CONCURRENCY stories at once, reviewers in parallel
 
 x-worker: &worker
   build: .
@@ -46,9 +47,9 @@ services:
       db:
         condition: service_healthy
 
-  scout:
+  tipster:
     <<: *worker
-    command: scout
+    command: tipster
     deploy:
       replicas: 2
 
@@ -63,7 +64,16 @@ services:
     command: reporter
     environment:
       DATABASE_URL: postgresql://newsroom:newsroom@db:5432/newsroom
-      REPORTER_CONCURRENCY: "3"
+      REPORTER_CONCURRENCY: "2"
+    deploy:
+      replicas: 1
+
+  scout:
+    <<: *worker
+    command: scout
+    environment:
+      DATABASE_URL: postgresql://newsroom:newsroom@db:5432/newsroom
+      SCOUT_CONCURRENCY: "4"
     deploy:
       replicas: 2
 
