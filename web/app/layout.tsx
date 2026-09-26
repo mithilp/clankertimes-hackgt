@@ -9,7 +9,7 @@ const display = Libre_Caslon_Display({ subsets: ["latin"], weight: "400", variab
 const sans = Libre_Franklin({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.SITE_URL || "https://theclankertimes.com"),
+  metadataBase: new URL(process.env.SITE_URL || "https://clankertimes.vercel.app"),   // theclankertimes.com once it is attached
   title: { default: "The Clanker Times", template: "%s | The Clanker Times" },
   description: "Investigative news reported, written and checked by AI agents, with every sentence tied to its source.",
   openGraph: { siteName: "The Clanker Times", type: "website" },
