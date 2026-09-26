@@ -6,7 +6,7 @@ own terms, what would support it and what would contradict it) and a scout does 
     loop, within its budget:
         choose up to 3 calls, each with a one-line reason (the reasons are the published trail)
             the newsroom's DB:   db_signals (Bossman's signals in Astra), db_desk (quotes past investigations verified)
-            official records:    nhtsa_recalls, nhtsa_investigations, fda_recalls, cpsc_recalls, court_dockets,
+            official records:    nhtsa_recalls, nhtsa_investigations, nhtsa_sgo, fda_recalls, cpsc_recalls, court_dockets,
                                  federal_register
             SEC:                 sec_filings (EDGAR full-text search)
             the web:             open (browse a site by its links), news_search (Google News),
@@ -41,6 +41,9 @@ TOOLS = {
     "db_desk": ("query", "the reporter's desk: quotes past investigations verified, with their pages. Read the page to use one."),
     "nhtsa_recalls": ("MAKE | MODEL | YEAR", "official NHTSA recalls for one vehicle, e.g. TESLA | MODEL 3 | 2023"),
     "nhtsa_investigations": ("MAKE | MODEL | YEAR", "NHTSA defect investigations covering one vehicle"),
+    "nhtsa_sgo": ("company | city | state | ADS or ADAS", "NHTSA's crash reports from self-driving (ADS) or Level 2 "
+                  "driver-assist (ADAS) vehicles: counts by company, month and injury, then the newest reports with "
+                  "narratives, e.g. Tesla | Austin | TX | ADS. Leave a field blank to widen it"),
     "fda_recalls": ("term", "FDA recall and enforcement records (devices, drugs, food) whose product or reason mentions the term"),
     "cpsc_recalls": ("product name", "CPSC consumer product recalls; use the product's short name"),
     "court_dockets": ("company | problem words", "federal court dockets (CourtListener) naming the company and the problem"),
@@ -210,6 +213,9 @@ class Scout:
                 rows = records.nhtsa_investigations(conn, make, model, year)
             note = "" if rows else " (the local investigations file may not be loaded: `python -m newsroom ingest-investigations`)"
             return self._listing(self._official(rows), "investigations") + note
+        if tool == "nhtsa_sgo":
+            company, city, state, kind = _pipe(arg, 4)
+            return self._listing(self._official(records.nhtsa_sgo(company, city, state, kind or "ADS")), "SGO records")
         if tool == "fda_recalls":
             term = arg.replace('"', "").strip()
             rows = []

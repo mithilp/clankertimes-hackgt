@@ -149,6 +149,91 @@ def lawsuits(company: str, problem: str) -> list[dict]:
     return records
 
 
+SGO_FILES = {"ADS": "https://static.nhtsa.gov/odi/ffdd/sgo-2021-01/SGO-2021-01_Incident_Reports_ADS.csv",
+             "ADAS": "https://static.nhtsa.gov/odi/ffdd/sgo-2021-01/SGO-2021-01_Incident_Reports_ADAS.csv"}
+
+
+def _sgo_rows(kind: str) -> tuple[list[dict], str]:
+    """NHTSA's Standing General Order crash file (ADS = driverless, ADAS = Level 2 driver assist), cached for a
+    day under data/sgo/. Returns (rows, the file's Last-Modified date)."""
+    import csv
+    import time
+    from pathlib import Path
+    path = Path("data/sgo") / f"{kind.lower()}.csv"
+    meta = path.with_suffix(".modified")
+    if not path.exists() or time.time() - path.stat().st_mtime > 86_400:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        response = httpx.get(SGO_FILES[kind], headers={"User-Agent": "Mozilla/5.0"}, timeout=120)
+        response.raise_for_status()
+        path.write_bytes(response.content)
+        meta.write_text(response.headers.get("last-modified", ""), encoding="utf-8")
+    if not meta.exists():
+        meta.write_text(httpx.head(SGO_FILES[kind], headers={"User-Agent": "Mozilla/5.0"}, timeout=30)
+                        .headers.get("last-modified", ""), encoding="utf-8")
+    with open(path, encoding="utf-8", errors="replace", newline="") as f:
+        return list(csv.DictReader(f)), meta.read_text(encoding="utf-8")
+
+
+def nhtsa_sgo(operator: str = "", city: str = "", state: str = "", kind: str = "ADS") -> list[dict]:
+    """Crashes reported to NHTSA under the Standing General Order, filtered by reporting or operating company,
+    city and state. First row: counts computed from the file (by company, month and injury severity); then
+    the newest individual reports, each with its narrative (which companies may withhold as confidential)."""
+    kind = "ADAS" if kind.strip().upper() == "ADAS" else "ADS"
+    rows, modified = _sgo_rows(kind)
+    op, city, state = operator.strip().lower(), city.strip().lower(), state.strip().lower()
+    hits = [r for r in rows
+            if (not op or op in r.get("Reporting Entity", "").lower() or op in r.get("Operating Entity", "").lower())
+            and (not city or r.get("City", "").strip().lower() == city)
+            and (not state or r.get("State", "").strip().lower() == state)]
+    url = SGO_FILES[kind]
+    scope = ", ".join(x for x in (operator, city, state) if x.strip()) or "all"
+    if not hits:
+        return [{"url": f"{url}#none-{scope}", "title": f"NHTSA SGO {kind} crash file: no reports for {scope}",
+                 "text": f"NHTSA's Standing General Order {kind} incident report file (last updated {modified}), "
+                         f"{len(rows)} reports in total, contains no reports matching {scope}.",
+                 "source_type": "government_record"}]
+    from collections import Counter
+    months = {m: n for n, m in enumerate(("JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"), 1)}
+
+    def when(r: dict) -> tuple[int, int]:
+        mon, _, year = r.get("Incident Date", "").partition("-")
+        return (int(year) if year.isdigit() else 0, months.get(mon.upper(), 0))
+    latest = {}
+    for r in hits:                       # a crash can have several report versions; count each Report ID once
+        if r.get("Report ID") and (r["Report ID"] not in latest or r.get("Report Version", "") > latest[r["Report ID"]].get("Report Version", "")):
+            latest[r["Report ID"]] = r
+    reports = sorted(latest.values(), key=when, reverse=True)
+    by_company = Counter(r.get("Reporting Entity", "?") for r in reports)
+    by_month = Counter(r.get("Incident Date", "?") for r in reports)
+    by_injury = Counter(r.get("Highest Injury Severity Alleged", "?") for r in reports)
+    summary = (f"Counts computed by the newsroom from NHTSA's Standing General Order {kind} incident report file "
+               f"(last updated {modified}; {len(rows)} report rows in the file). Reports matching {scope}: {len(reports)} "
+               f"distinct crash reports. By reporting company: {dict(by_company.most_common())}. By incident month: "
+               f"{dict(sorted(by_month.items(), key=lambda kv: when({'Incident Date': kv[0]})))}. By highest injury "
+               f"severity alleged: {dict(by_injury.most_common())}. Fatalities alleged: "
+               f"{sum('fatal' in r.get('Highest Injury Severity Alleged', '').lower() for r in reports)}.")
+    out = [{"url": f"{url}#summary-{scope.replace(' ', '_')}", "title": f"NHTSA SGO {kind} crash reports, {scope}: counts",
+            "text": summary, "source_type": "government_record"}]
+    for r in reports[:15]:
+        narrative = r.get("Narrative", "").strip() or "(no narrative)"
+        if r.get("Narrative - CBI?", "").strip().upper() == "Y":
+            narrative = "[narrative withheld by the company as confidential business information]"
+        out.append({"url": f"{url}#report-{r['Report ID']}",
+                    "title": f"NHTSA SGO report {r['Report ID']}: {r.get('Reporting Entity', '')}, {r.get('Incident Date', '')}, "
+                             f"{r.get('City', '')} {r.get('State', '')}",
+                    "text": _text(f"NHTSA Standing General Order {kind} crash report {r['Report ID']} (version {r.get('Report Version')}, "
+                                  f"{r.get('Report Type')} report, submitted {r.get('Report Submission Date')}). Reporting entity: "
+                                  f"{r.get('Reporting Entity')}. Operator: {r.get('Operating Entity')}. Vehicle: {r.get('Model Year')} "
+                                  f"{r.get('Make')} {r.get('Model')}, driver/operator type {r.get('Driver / Operator Type')}, "
+                                  f"engagement {r.get('Engagement Status')}. Incident {r.get('Incident Date')} "
+                                  f"{r.get('Incident Time (24:00)')}, {r.get('City')}, {r.get('State')}, {r.get('Roadway Type')}. "
+                                  f"Crash with: {r.get('Crash With')}. Highest injury severity alleged: "
+                                  f"{r.get('Highest Injury Severity Alleged')}. Speed before crash: {r.get('SV Precrash Speed (MPH)')} mph.",
+                                  narrative),
+                    "source_type": "government_record"})
+    return out
+
+
 # What an 8-K item number means: the items are how a company says what happened.
 EIGHT_K_ITEMS = {"1.01": "material agreement", "1.02": "agreement terminated", "1.03": "bankruptcy or receivership",
                  "1.05": "cybersecurity incident", "2.01": "acquisition or sale completed", "2.03": "new debt",
