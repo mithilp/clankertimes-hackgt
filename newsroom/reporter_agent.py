@@ -1163,7 +1163,11 @@ class Investigation:
                 add(sub.get("settled_at") or sub.get("reported_at"), f"Scout {n}", summary, "confirmed")
             else:
                 add(sub.get("reported_at"), f"Scout {n}", summary, "unclear")
-        add(decision.get("at"), "Reporter", decision.get("why", ""))
+        if decision.get("pivot"):
+            add(decision.get("at"), "Reporter", f"Changed course: the records pointed to a different story than the one "
+                                                f"proposed. {decision['pivot']['hypothesis']}")
+        else:
+            add(decision.get("at"), "Reporter", decision.get("why", ""))
         rounds = reviewed.get("history") or []
         for c in rounds[:-1] if reviewed.get("outcome") == "approved" else rounds:
             for j in c["review"]["judges"]:
