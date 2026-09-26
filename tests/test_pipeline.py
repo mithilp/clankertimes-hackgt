@@ -69,3 +69,24 @@ def test_a_pass_works_new_results_end_to_end_and_never_twice(env, monkeypatch):
     assert [s["status"] for s in first] == ["published"] and again == []
     [record] = d.recent()
     assert record["hypothesis_id"] == "mclov:m1" and record["status"] == "published"
+
+
+def test_mcLovin_results_marked_already_reported_or_not_hypotheses_are_skipped():
+    base = {"hypothesis": "X did Y.", "accountable_party": "X", "kind": "hypothesis"}
+    assert pipeline.from_mclovin({**base, "_id": "a", "outcome": "lead"})
+    assert pipeline.from_mclovin({**base, "_id": "b", "outcome": "already_reported"}) is None
+    assert pipeline.from_mclovin({"_id": "c", "kind": "no_connection", "reason": "same press release"}) is None
+    assert pipeline.from_mclovin({"_id": "d", "kind": "run", "signals_read": 40}) is None
+
+
+def test_pending_skips_finished_in_progress_and_repeatedly_failed_results():
+    from newsroom.signals import now
+    docs = [{"_id": n, "hypothesis": f"Claim {n} about X.", "kind": "hypothesis", "outcome": "lead"} for n in "abcd"]
+    desk = InMemoryDesk()
+    desk.save({"id": "r1", "hypothesis_id": "mclov:a", "status": "published"})
+    desk.save({"id": "r2", "hypothesis_id": "mclov:b", "status": "reporting"})          # fresh: someone is on it
+    for n in range(pipeline.MAX_FAILURES):
+        desk.save({"id": f"f{n}", "hypothesis_id": "mclov:c", "status": "failed"})
+    todo = pipeline.pending(Results(docs), desk)
+    assert [h["id"] for h in todo] == ["mclov:d"]
+    assert now()        # records got fresh updated_at stamps from the desk

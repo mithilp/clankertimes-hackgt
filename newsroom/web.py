@@ -1,4 +1,7 @@
-"""Brave Search and page fetching for scouts. Fetched pages are cached, so quotes can be re-checked later."""
+"""Web search and page fetching for scouts. Fetched pages are cached, so quotes can be re-checked later.
+
+Search defaults to newsroom/browser.py: no API key, DuckDuckGo first. NEWSROOM_SEARCH_BACKEND=brave uses the
+Brave Search API instead (needs BRAVE_API_KEY)."""
 
 import io
 import re
@@ -15,22 +18,25 @@ HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; newsroom-research/0.1)"}
 
 
 class SearchError(RuntimeError):
-    pass
+    """Search can't work at all as configured (e.g. the Brave backend without a key)."""
+
+
+class SearchUnavailable(SearchError):
+    """Every engine was paused, blocked or unhelpful just now. Temporary: try other sources, or later."""
 
 
 def search(query: str, count: int = 10) -> list[dict]:
-    """Brave by default; NEWSROOM_SEARCH_BACKEND=browser searches with a local headless browser instead."""
-    key = config.load().brave_api_key
-    if config.load().search_backend == "browser":
+    """No API key by default (newsroom/browser.py). Brave only when NEWSROOM_SEARCH_BACKEND=brave: it is
+    never a silent fallback."""
+    if config.load().search_backend != "brave":
         from . import browser
         try:
             return browser.search(query, count)
-        except browser.BrowserError:
-            if not key:
-                raise
-            # The engine blocked us or served junk; the Brave API is the honest fallback.
+        except browser.BrowserError as e:
+            raise SearchUnavailable(str(e)) from e
+    key = config.load().brave_api_key
     if not key:
-        raise SearchError("BRAVE_API_KEY is not set: add it to .env")
+        raise SearchError("NEWSROOM_SEARCH_BACKEND=brave but BRAVE_API_KEY is not set in .env")
     response = httpx.get(BRAVE_URL, params={"q": query, "count": count},
                          headers={"X-Subscription-Token": key, "Accept": "application/json"}, timeout=30)
     response.raise_for_status()

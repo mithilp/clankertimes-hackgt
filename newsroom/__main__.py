@@ -101,7 +101,7 @@ def main(argv: list[str] | None = None) -> None:
     p.add_argument("--limit", type=int, default=1, help="McLovin results to work this pass")
     p.add_argument("--budget", type=int, default=10, help="base scout budget: calls per scout per assignment")
     p.add_argument("--from", dest="kind", choices=["auto", "astra", "file"], default="auto",
-                   help="where McLovin's results are: Astra (mclov_results) or runs/mclovin/ files")
+                   help="where McLovin's results are: Astra (mclovin_results) or runs/mclovin/ files")
     p.add_argument("--loop", type=float, metavar="MINUTES", help="keep running a pass every N minutes")
     p.add_argument("--dry-run", action="store_true", help="list what would be worked; no model calls")
     p.add_argument("--peek", action="store_true", help="print a few raw McLovin documents and how the reporter reads them")

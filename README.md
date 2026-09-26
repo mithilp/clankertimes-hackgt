@@ -18,7 +18,7 @@ Add your keys to `.env` (see `.env.example` for the names): `DEEPSEEK_API_KEY` a
 ## The agent pipeline
 
 ```
-Bossman -> signals (Astra) -> McLovin -> mclov_results (Astra)
+Bossman -> signals (Astra) -> McLovin -> mclovin_results (Astra)
    -> Reporter: frames the hypothesis, decides how many scouts, directs them (never searches itself)
    -> Scouts: the newsroom DB, official records (NHTSA, FDA, CPSC, courts, Federal Register) and a real
       browser; every quote checked against its page; each reports back

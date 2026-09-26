@@ -121,6 +121,10 @@ def env(conn, monkeypatch, tmp_path):
 COVERAGE_TASKS: list[dict] = []
 
 
+# A coverage search that ran (even one that found nothing is an answer).
+SEARCHED = {"tool": "news_search", "arg": "tesla steering", "why": "prior coverage", "result": "2 news results"}
+
+
 def fake_scouts(monkeypatch, found=None, sent=None, coverage=None):
     """Scouts that return findings by the start of their statement (default: SUPPORT), with a report like a real
     scout's. The coverage scout returns `coverage`. Records every task they were sent."""
@@ -129,7 +133,7 @@ def fake_scouts(monkeypatch, found=None, sent=None, coverage=None):
     def run(task, *, budget, context="", leads=(), avoid=(), say=None):
         if task.get("mode") == "coverage":
             COVERAGE_TASKS.append(task)
-            return {"findings": [], "trail": [], "used": 1,
+            return {"findings": [], "trail": [SEARCHED], "used": 1,
                     "report": {"coverage": coverage or [], "gap": "nobody tied it to NHTSA", "searched": ["news_search: tesla steering"]}}
         statement = task["statement"]
         if sent is not None:
@@ -467,9 +471,18 @@ def test_scout_reports_reach_the_reporter_and_published_articles_carry_the_trail
     direct = next(u for s, u in model.calls if s == "direct")
     assert "scout's report: supports (high confidence). scout summary for NHTSA opened" in direct
     site = captured["site"]
-    assert site["reporting"]["hypothesis"].startswith("NHTSA opened EA24-002")
-    assert [c["result"] for c in site["reporting"]["checks"]] == ["supported"] * 3
-    assert {c["judge"] for c in site["council"]} == {"skeptic", "virality", "novelty"}
+    # The site gets a timeline (not the old reporting/council fields), and the document actually builds:
+    # a mismatch here once made every published story silently skip the website.
+    from newsroom import articles_store
+    steps = site["timeline"]
+    who = [x["who"] for x in steps]
+    assert who[0] == "Hypothesis desk" and steps[0]["text"].startswith("Proposed the claim to test")
+    assert [x["result"] for x in steps if x["who"].startswith("Scout")] == ["confirmed"] * 3
+    assert who[-2:] == ["Council", "Published"] and steps[-1]["result"] == "published"
+    assert [x["at"] for x in steps] == sorted(x["at"] for x in steps)
+    assert not any(x["result"] in ("contradicts", "dead_end") for x in steps)
+    doc = articles_store.to_document("slug", captured["draft"], {}, **site)
+    assert doc["timeline"] == steps
     assert result["sub_hypotheses"][0]["reports"][0]["verdict"] == "supports"
 
 
@@ -533,7 +546,7 @@ def test_the_coverage_scout_marks_published_elements_for_the_plan(env, monkeypat
     def run_scout(task, **kw):
         if task.get("mode") == "coverage":
             assert [e["id"] for e in task["elements"]] == ["E1", "E2", "E3"]
-            return {"findings": [], "trail": [], "report": {"coverage": [], "reported_elements": ["E3"], "status": "partly_reported"}}
+            return {"findings": [], "trail": [SEARCHED], "report": {"coverage": [], "reported_elements": ["E3"], "status": "partly_reported"}}
         return {"findings": SUPPORT.get(task["statement"][:12], []), "trail": [], "report": {"verdict": "unclear"}}
     monkeypatch.setattr(reporter_agent.scout_agent, "run", run_scout)
     result = run(write=False)
@@ -548,3 +561,19 @@ def test_the_rule_can_be_switched_off_for_pipeline_testing(env, monkeypatch):
     news = finding(NEWS, "NHTSA opened an engineering analysis into loss of steering control.", source_type="news_report")
     fake_scouts(monkeypatch, {**SUPPORT, "NHTSA opened": [news]})
     r = run(); assert r["final"]["status"] == "published", r["final"]
+
+
+def test_a_story_whose_coverage_could_not_be_checked_is_not_written(env, monkeypatch):
+    """If every search for prior coverage failed, "nothing found" means nothing: stop, don't publish."""
+    monkeypatch.setattr(llm, "ask_json", FakeModel())
+
+    def run_scout(task, **kw):
+        if task.get("mode") == "coverage":
+            return {"findings": [], "report": {"coverage": [], "status": "not_reported"},
+                    "trail": [{"tool": "news_search", "arg": "x", "why": "", "result": f"{scout_agent.UNAVAILABLE}: paused"},
+                              {"tool": "web_search", "arg": "y", "why": "", "result": "failed: ConnectError: offline"}]}
+        raise AssertionError("no reporting scout should be sent when coverage is unknown")
+    monkeypatch.setattr(reporter_agent.scout_agent, "run", run_scout)
+    with pytest.raises(reporter_agent.CoverageUnknown):
+        run(write=True)
+    assert reporter_agent.coverage_checked([SEARCHED]) and not reporter_agent.coverage_checked([])

@@ -40,6 +40,7 @@ from pathlib import Path
 from . import article, config, council, db, llm, playbooks, scout, scout_agent, web
 from .bossman import run_dir
 from .desk import TERMINAL, get_desk
+from .signals import now
 from .mclovin import hypothesis_id
 
 MAX_SUBS = 8                 # sub-hypotheses one story may carry, counting ones granted along the way
@@ -413,6 +414,36 @@ def _strs(value) -> list[str]:
     return [str(x).strip() for x in value if str(x).strip()] if isinstance(value, list) else []
 
 
+class CoverageUnknown(RuntimeError):
+    """The coverage scout couldn't run a single search, so whether the story is already reported is unknown."""
+
+
+def coverage_checked(trail: list[dict]) -> bool:
+    """True when at least one search for prior coverage actually ran (a news or web search that wasn't
+    unavailable or failed). Zero results from a search that ran is a real answer; a search that never ran
+    is not."""
+    return any(t.get("tool") in ("news_search", "web_search")
+               and not str(t.get("result", "")).startswith((scout_agent.UNAVAILABLE, "failed"))
+               for t in trail)
+
+
+# How the timeline names who did what.
+DESKS = {"atlanta": "Atlanta desk", "georgia-tech": "Georgia Tech desk", "tech": "Technology desk",
+         "us-politics": "Politics desk", "product-safety": "Product safety desk", "ai-industry": "AI desk",
+         "higher-ed": "Higher education desk"}
+JUDGES = {"skeptic": "Skeptic", "novelty": "Novelty judge", "virality": "Virality judge"}
+
+
+def _iso(at) -> str:
+    """Any stored timestamp ("...Z", "+00:00", with or without microseconds) as UTC ISO, to the second."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat(str(at).replace("Z", "+00:00"))
+    except ValueError:
+        return str(at)
+    return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).isoformat(timespec="seconds")
+
+
 def require_new() -> bool:
     """NEWSROOM_REQUIRE_NEW=0 turns off the new-finding rule (for testing the rest of the pipeline only)."""
     import os
@@ -496,6 +527,7 @@ class Investigation:
 
     # 1. frame
     def start(self) -> None:
+        self.started_at = now()
         self.signals, self.leads = signals_for(self.h, self.store)
         self.say(f"newsroom DB: {len(self.signals)} related signals, {len(self.leads)} pages as leads")
         self.recall()
@@ -518,6 +550,12 @@ class Investigation:
             raise
         except Exception as e:  # noqa: BLE001 - no coverage report means the plan says so, not a failed story
             self.coverage = {"findings": [], "trail": [], "report": {"coverage": [], "summary": f"coverage scout failed: {e}"}}
+        if not coverage_checked(self.coverage.get("trail", [])):
+            # "Nothing found" only means something if we could look. Never publish a story whose prior
+            # coverage nobody could check: stop, and let the pipeline retry it when search is back.
+            raise CoverageUnknown("couldn't check prior coverage: every search for it failed. "
+                                  "Not writing a story that may already be reported; it will be retried.")
+        self.coverage_at = now()
         cov = self.coverage["report"]
         found = cov.get("coverage", [])
         self.coverage_urls = {c["url"] for c in found} | {f["url"] for f in self.coverage.get("findings", [])}
@@ -723,6 +761,9 @@ class Investigation:
             if error:
                 report = {"verdict": "unclear", "summary": f"the scout failed: {type(error).__name__}: {error}"[:300]}
             sub["reports"].append(report)
+            sub["reported_at"] = now()
+            if status(sub["findings"]) == "supported" and not sub.get("settled_at"):
+                sub["settled_at"] = sub["reported_at"]      # when the claim was first confirmed, for the timeline
             tally = {k: sum(f["finding"] == k for f in sub["findings"]) for k in ("supports", "contradicts", "unclear")}
             self.say(f"  scout {sub['id']} reports {report.get('verdict', 'unclear')} ({report.get('confidence', '?')}): "
                      f"+{sub['last_new']} quotes {tally} -> {status(sub['findings'])}. {report.get('summary', '')[:160]}")
@@ -854,7 +895,7 @@ class Investigation:
         novel = new_findings(self.subs, self.coverage_urls)
         new_finding = ({"id": novel[0][0]["id"], "statement": novel[0][0]["statement"], "novelty": novel[0][0]["novelty"],
                         "url": novel[0][1]["url"], "quote": novel[0][1]["quote"]} if novel else None)
-        return {"verdict": v, "story": story, "why": why, "downgraded": downgraded, "new_finding": new_finding,
+        return {"verdict": v, "story": story, "why": why, "downgraded": downgraded, "new_finding": new_finding, "at": now(),
                 "memo": reply.get("memo") if isinstance(reply.get("memo"), dict) else {},
                 "narrowed_hypothesis": str(reply.get("narrowed_hypothesis") or "").strip(),
                 "headline_idea": str(reply.get("headline_idea") or "")}
@@ -911,7 +952,7 @@ class Investigation:
         d, history = first, []
         for n in range(MAX_REVISIONS + 1):
             result = council.review({"article": d, "sources": sources}, judges)
-            entry = {"round": n + 1, "draft": d, "review": result}
+            entry = {"round": n + 1, "draft": d, "review": result, "at": now()}
             history.append(entry)
             flagged = [j["judge"] for j in result["judges"] if j["judge"] in GATE_JUDGES and j["verdict"] != "approve"]
             self.say(f"  council round {n + 1}: " + ", ".join(f"{j['judge']} {j['verdict']}" for j in result["judges"])
@@ -982,22 +1023,56 @@ class Investigation:
                     sources[f"F{n}"] = self._source(f)
 
     def site_fields(self, decision: dict, reviewed: dict) -> dict:
-        """What the website shows beside the article: the hypothesis as narrowed, each check the scouts made
-        and its result, and the council's verdicts. Beats come from the signals that raised the question."""
-        checks = []
-        for s in self.subs:
-            if s["dropped"]:
-                continue
-            r = s["reports"][-1] if s["reports"] else {}
-            checks.append({"claim": s["statement"], "result": status(s["findings"]),
-                           "note": r.get("summary", "")[:400]})
-        last = reviewed["history"][-1]["review"]["judges"] if reviewed.get("history") else []
+        """What the website needs beside the article: the beats it belongs to, and how it came together."""
         beats = sorted({b for s in self.signals for b in getattr(s, "beats", []) or []})
-        return {"beats": beats,
-                "reporting": {"hypothesis": decision.get("narrowed_hypothesis") or self.h["hypothesis"],
-                              "checks": checks, "verdict": decision["why"], "new_finding": decision.get("new_finding"),
-                              "prior_coverage": self.coverage.get("report", {}).get("coverage", [])},
-                "council": [{"judge": j["judge"], "verdict": j["verdict"], "note": j.get("notes", "")[:400]} for j in last]}
+        return {"beats": beats, "timeline": self.timeline(decision, reviewed)}
+
+    def timeline(self, decision: dict, reviewed: dict) -> list[dict]:
+        """How the story came together, for the site: the path that led to it, oldest first. Dead ends,
+        contradicted and dropped claims, and material that was cut are left out on purpose."""
+        steps: list[dict] = []
+
+        def add(at, who: str, text: str, result: str = "") -> None:
+            if at:
+                steps.append({"at": _iso(at), "who": who, "text": text.strip()[:400], "result": result})
+
+        seen = [s for s in self.signals if getattr(s, "first_seen", "")]
+        if seen:
+            first = min(seen, key=lambda s: _iso(s.first_seen))
+            desk = next((DESKS[b] for b in getattr(first, "beats", []) or [] if b in DESKS), "The news desk")
+            add(first.first_seen, desk, f"Noticed: {first.summary}")
+        add(self.h.get("mclovin", {}).get("created") or getattr(self, "started_at", ""), "Hypothesis desk",
+            f"Proposed the claim to test: {self.h['hypothesis']}")
+        cov = self.coverage.get("report", {}) if isinstance(self.coverage, dict) else {}
+        if cov.get("coverage"):
+            n = len(cov["coverage"])
+            gap = self.plan.get("gap", "")
+            add(getattr(self, "coverage_at", ""), "Coverage scout",
+                f"Found {n} earlier report{'s' if n != 1 else ''} on this." + (f" What they left open: {gap}" if gap else ""))
+        # Confirmed claims, and unsettled ones the scouts found something on. A claim with nothing found is a
+        # dead end, and a contradicted one didn't make the story: both stay out.
+        kept = [s for s in self.subs if not s["dropped"] and (status(s["findings"]) in ("supported", "disputed")
+                                                                 or (status(s["findings"]) == "open" and s["findings"]))]
+        if kept:
+            add(getattr(self, "coverage_at", "") or getattr(self, "started_at", ""), "Reporter",
+                f"Split the claim into {len(kept)} part{'s' if len(kept) != 1 else ''} and sent a scout after each.")
+        for n, sub in enumerate(kept, 1):
+            summary = (sub["reports"][-1] if sub["reports"] else {}).get("summary") or sub["statement"]
+            if status(sub["findings"]) == "supported":
+                add(sub.get("settled_at") or sub.get("reported_at"), f"Scout {n}", summary, "confirmed")
+            else:
+                add(sub.get("reported_at"), f"Scout {n}", summary, "unclear")
+        add(decision.get("at"), "Reporter", decision.get("why", ""))
+        rounds = reviewed.get("history") or []
+        for c in rounds[:-1] if reviewed.get("outcome") == "approved" else rounds:
+            for j in c["review"]["judges"]:
+                if j["verdict"] != "approve" and (j.get("notes") or j.get("problems")):
+                    note = j.get("notes") or "; ".join(str(p.get("issue", "")) for p in j["problems"][:2])
+                    add(c.get("at"), JUDGES.get(j["judge"], j["judge"].title()), note, "revise")
+        if reviewed.get("outcome") == "approved" and rounds:
+            add(rounds[-1].get("at"), "Council", "Approved: the skeptic, novelty and virality judges all signed off.", "approved")
+            add(now(), "Published", "", "published")
+        return sorted(steps, key=lambda x: x["at"])
 
     # recording
     def to_dict(self) -> dict:

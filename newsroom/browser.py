@@ -1,17 +1,19 @@
-"""Local-browser search and fetching: a free alternative to the Brave Search API.
+"""Web search without an API key, and page reading with a local browser. The default search backend.
 
-Brave stays the default. Set NEWSROOM_SEARCH_BACKEND=browser to drive a real headless browser
-on this machine instead, which costs nothing and reads pages that block plain HTTP.
+Search tries, in order, until one gives results that are plainly about the query:
+    1. DuckDuckGo's lite page, over plain HTTP (no browser needed)
+    2. DuckDuckGo's HTML page, over plain HTTP
+    3. Bing, in a local headless browser (needs playwright; Bing often serves headless browsers
+       results for some other query, which the relevance check below throws out)
 
+Every engine is shared fairly with the other newsroom processes on this machine (newsroom/throttle.py).
+If an engine answers with a bot check, we never try to get past it: that engine is paused for everyone
+for ten minutes and the search moves on. The Brave Search API is still available, but only when
+NEWSROOM_SEARCH_BACKEND=brave is set; it is never a silent fallback.
+
+Reading pages uses the headless browser (render JS, get past plain-HTTP blocks):
     pip install playwright && playwright install chromium
-
-By default it launches Playwright's bundled Chromium. Set NEWSROOM_BROWSER_CHANNEL=chrome to use
-the Chrome already installed on the machine instead.
-
-Searches read Bing's results page, which a real browser gets served normally (DuckDuckGo's HTML
-endpoint refuses headless traffic, so it is only a fallback). If a search page comes back as a bot
-challenge we raise rather than trying to get around it, and the newsroom can fall back to the Brave
-API by flipping the env var back.
+NEWSROOM_BROWSER_CHANNEL=chrome uses the installed Chrome instead of bundled Chromium.
 """
 
 import re
@@ -23,15 +25,10 @@ from bs4 import BeautifulSoup
 from . import config
 
 MAX_TEXT = 200_000
-# (engine url template, result selector, link selector, snippet selector, title selector or None for the link text)
-# Brave's web page first: Bing serves headless browsers degraded, generic results on some machines (the
-# query check below catches that), and each engine that fails costs a page load.
-_ENGINES = [
-    ("https://search.brave.com/search?q={q}", "div.snippet[data-type=web]", "a[href^=http]", ".content",
-     ".search-snippet-title"),
-    ("https://www.bing.com/search?q={q}&count={n}", "li.b_algo", "h2 a", ".b_caption p, .b_algoSlug", None),
-    ("https://html.duckduckgo.com/html/?q={q}", ".result, .web-result", "a.result__a", ".result__snippet", None),
-]
+ENGINE_GAP = 10           # seconds between requests to one engine, across all processes (3s drew bot checks)
+BLOCK_PAUSE = 600         # seconds an engine is skipped after it shows a bot check
+_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) "
+       "Chrome/140.0.0.0 Safari/537.36")
 _BLOCK_MARKERS = ("captcha", "are you a robot", "verify you are human", "unusual traffic", "cf-challenge",
                   "access denied", "permission to access", "just a moment")
 
@@ -115,27 +112,73 @@ class _Browser:
 _browser = _Browser()
 
 
-def search(query: str, count: int = 10) -> list[dict]:
-    """Same shape as web.search: [{title, url, description}]."""
-    last_error = None
-    for template, result_sel, link_sel, snippet_sel, title_sel in _ENGINES:
-        url = template.format(q=urllib.parse.quote_plus(query), n=max(count, 10))
-        try:
-            html = _browser.html(url)
-            _check_blocked(html)
-        except Blocked as e:
-            last_error = e
+def _http(url: str, query: str) -> str:
+    import httpx
+    response = httpx.post(url, data={"q": query}, headers={"User-Agent": _UA}, timeout=25, follow_redirects=True)
+    if response.status_code == 202 or "anomaly" in response.text[:20000].lower():
+        raise Blocked(f"{url} answered with a bot check")
+    response.raise_for_status()
+    return response.text
+
+
+def _ddg_lite(query: str, count: int) -> list[dict]:
+    html = _http("https://lite.duckduckgo.com/lite/", query)
+    soup = BeautifulSoup(html, "html.parser")
+    results, seen = [], set()
+    for link in soup.select("a.result-link"):
+        url = _real_url(link.get("href", ""))
+        if not url or url in seen:
             continue
-        results = _parse(html, result_sel, link_sel, snippet_sel, count, title_sel)
-        host = urllib.parse.urlparse(url).hostname
+        seen.add(url)
+        row = link.find_parent("tr")
+        snippet = row.find_next_sibling("tr") if row else None
+        cell = snippet.select_one(".result-snippet") if snippet else None
+        results.append({"title": link.get_text(" ", strip=True), "url": url,
+                        "description": cell.get_text(" ", strip=True) if cell else ""})
+        if len(results) >= count:
+            break
+    return results
+
+
+def _ddg_html(query: str, count: int) -> list[dict]:
+    return _parse(_http("https://html.duckduckgo.com/html/", query), ".result, .web-result", "a.result__a",
+                  ".result__snippet", count)
+
+
+def _bing(query: str, count: int) -> list[dict]:
+    html = _browser.html(f"https://www.bing.com/search?q={urllib.parse.quote_plus(query)}&count={max(count, 10)}")
+    _check_blocked(html)
+    return _parse(html, "li.b_algo", "h2 a", ".b_caption p, .b_algoSlug", count)
+
+
+ENGINES = [("duckduckgo-lite", _ddg_lite), ("duckduckgo", _ddg_html), ("bing", _bing)]
+
+
+def search(query: str, count: int = 10) -> list[dict]:
+    """Same shape as web.search: [{title, url, description, engine}]."""
+    from . import throttle
+    problems = []
+    for name, engine in ENGINES:
+        if (left := throttle.paused(name)) > 0:
+            problems.append(f"{name} paused for {left / 60:.0f} more minutes after a bot check")
+            continue
+        try:
+            with throttle.pace(name, ENGINE_GAP):
+                results = engine(query, count)
+        except Blocked as e:
+            throttle.pause(name, BLOCK_PAUSE)
+            problems.append(f"{name}: {e}; pausing it for everyone")
+            continue
+        except Exception as e:  # noqa: BLE001 - a dead engine (network, playwright missing): try the next
+            problems.append(f"{name}: {type(e).__name__}: {e}"[:200])
+            continue
         if not results:
-            last_error = BrowserError(f"no results parsed from {host}")
+            problems.append(f"{name}: no results")
         elif not _matches_query(query, results):
-            last_error = BrowserError(f"{host} returned results unrelated to the query (it degrades results "
-                                      "for automated browsers); not using them")
+            problems.append(f"{name}: results unrelated to the query")
         else:
-            return [{**r, "engine": host} for r in results]
-    raise last_error or BrowserError("every search engine returned nothing")
+            return [{**r, "engine": name} for r in results]
+    raise BrowserError("no search engine gave usable results: " + "; ".join(problems))
 
 
 _STOP = {"the", "and", "for", "with", "from", "that", "this", "are", "was", "not"}

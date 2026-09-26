@@ -8,7 +8,7 @@ own terms, what would support it and what would contradict it) and a scout does 
             the newsroom's DB:   db_signals (Bossman's signals in Astra), db_desk (quotes past investigations verified)
             official records:    nhtsa_recalls, nhtsa_investigations, fda_recalls, cpsc_recalls, court_dockets,
                                  federal_register
-            the web:             news_search (Google News), web_search (a real browser, or Brave), read
+            the web:             news_search (Google News), web_search (DuckDuckGo, then Bing), read
         run them in parallel; `read` pulls exact quotes, each checked word for word against the page
     report back: verdict, what was searched (so "nothing found" is scoped to a search), dead ends,
                  new hypotheses worth the reporter's budget, and what to check next
@@ -30,6 +30,7 @@ from . import config, llm, playbooks, records, web
 from .scout import COUNTS_AS_PROOF, read as read_page
 
 MAX_CALLS_PER_STEP = 3
+UNAVAILABLE = "search unavailable right now"
 MAX_RESULTS_SHOWN = 6
 TRAIL_CHARS = 14_000
 
@@ -325,6 +326,8 @@ class Scout:
     def _safe(self, tool: str, arg: str) -> str:
         try:
             return self.call(tool, arg)
+        except web.SearchUnavailable as e:
+            return f"{UNAVAILABLE}: {e}"[:300]      # temporary; the scout tries other sources
         except web.SearchError:
             raise
         except Exception as e:  # noqa: BLE001 - a failed call is a result: the scout goes elsewhere

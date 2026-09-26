@@ -1,6 +1,6 @@
 """The newsroom end to end, from McLovin's results to the website:
 
-    Bossman -> signals (Astra)  ->  McLovin -> mclov_results (Astra)
+    Bossman -> signals (Astra)  ->  McLovin -> mclovin_results (Astra)
                                                   │
                                     pipeline: every result the desk hasn't worked yet
                                                   │
@@ -38,6 +38,10 @@ ALIASES = {
     "signal_ids": ("signal_ids", "signals", "evidence_signal_ids"),
 }
 NOT_READY = {"watching", "rejected", "ignored", "draft", "not_ready"}
+# McLovin's own verdicts that mean "don't report this": the story is already out, or the signals didn't connect.
+SKIP_OUTCOMES = {"already_reported", "no_connection", "rejected", "duplicate"}
+MAX_FAILURES = 3             # a result that keeps failing stops being retried
+IN_PROGRESS_HOURS = 3        # a desk record this fresh and unfinished means someone is working it now
 
 
 def _first(doc: dict, names: tuple[str, ...]):
@@ -65,6 +69,10 @@ def from_mclovin(doc: dict) -> dict | None:
         return None
     if doc.get("problems") or str(doc.get("status", "")).lower() in NOT_READY:
         return None
+    if str(doc.get("outcome", "")).lower() in SKIP_OUTCOMES:
+        return None                     # McLovin found it already reported, or not a connected story
+    if doc.get("kind") and doc["kind"] != "hypothesis":
+        return None                     # McLovin's run logs and notes live in the same collection
     raw_id = doc.get("_id") or doc.get("id")
     return {
         "id": f"mclov:{raw_id}" if raw_id else reporter_agent.hypothesis_id(text),
@@ -80,11 +88,11 @@ def from_mclovin(doc: dict) -> dict | None:
 
 
 class AstraMcLovin:
-    """McLovin's results collection in Astra (NEWSROOM_MCLOVIN_COLLECTION, default mclov_results). Read only."""
+    """McLovin's results collection in Astra (NEWSROOM_MCLOVIN_COLLECTION, default mclovin_results). Read only."""
 
     def __init__(self, name: str | None = None) -> None:
         from .signals_astra import connect
-        self.name = name or os.getenv("NEWSROOM_MCLOVIN_COLLECTION", "mclov_results")
+        self.name = name or os.getenv("NEWSROOM_MCLOVIN_COLLECTION", "mclovin_results")
         self.database = connect()
         if self.name not in self.database.list_collection_names():
             raise RuntimeError(f"no {self.name!r} collection in this Astra database "
@@ -124,16 +132,24 @@ def source(kind: str = "auto"):
 
 
 def pending(src, desk=None, limit: int = 200) -> list[dict]:
-    """McLovin results the reporter hasn't finished, newest first."""
+    """McLovin results the reporter hasn't finished, newest first. Skips results already worked to a verdict,
+    results someone is working right now, and results that failed MAX_FAILURES times."""
+    from datetime import datetime, timedelta, timezone
+    fresh = (datetime.now(timezone.utc) - timedelta(hours=IN_PROGRESS_HOURS)).isoformat(timespec="seconds")
     desk = desk if desk is not None else get_desk()
     out = []
     for doc in src.results(limit=limit):
         h = from_mclovin(doc)
         if h is None:
             continue
-        done = [r for r in desk.for_hypothesis(h["id"]) if r.get("status") in TERMINAL and r.get("status") != "failed"]
-        if not done:
-            out.append(h)
+        records = desk.for_hypothesis(h["id"])
+        if any(r.get("status") in TERMINAL and r.get("status") != "failed" for r in records):
+            continue                    # already worked to a verdict
+        if any(r.get("status") not in TERMINAL and str(r.get("updated_at", "")) >= fresh for r in records):
+            continue                    # being worked right now, maybe on another machine
+        if sum(r.get("status") == "failed" for r in records) >= MAX_FAILURES:
+            continue
+        out.append(h)
     return out
 
 

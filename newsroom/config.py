@@ -14,7 +14,7 @@ class Settings:
     llm_provider: str        # "deepseek" (default) or "claude_code": the local `claude` CLI on a Claude plan
     claude_bin: str
     claude_concurrency: int  # concurrent `claude -p` processes
-    search_backend: str      # "brave" (default) or "browser": a local headless browser, no API key
+    search_backend: str      # "browser" (default): no API key, DuckDuckGo first; or "brave": the Brave API
     browser_channel: str | None  # e.g. "chrome" to drive the installed Chrome instead of bundled Chromium
     deepseek_api_key: str | None
     deepseek_base_url: str
@@ -46,7 +46,7 @@ def load() -> Settings:
         llm_provider=provider,
         claude_bin=env("CLAUDE_BIN", "claude"),
         claude_concurrency=int(env("NEWSROOM_CLAUDE_CONCURRENCY", "2")),
-        search_backend=env("NEWSROOM_SEARCH_BACKEND", "brave").lower(),
+        search_backend=env("NEWSROOM_SEARCH_BACKEND", "browser").lower(),
         browser_channel=env("NEWSROOM_BROWSER_CHANNEL") or None,
         deepseek_api_key=env("DEEPSEEK_API_KEY") or None,
         deepseek_base_url=env("DEEPSEEK_BASE_URL", "https://api.deepseek.com"),

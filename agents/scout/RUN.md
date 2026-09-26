@@ -9,7 +9,7 @@ assignment from the Reporter (statement · records to try first · the records' 
    └─ loop, within budget: choose up to 3 calls, each with a one-line reason (published as the trail)
          the newsroom's DB   db_signals (Bossman's signals in Astra) · db_desk (quotes past investigations verified)
          official records   nhtsa_recalls · nhtsa_investigations · fda_recalls · cpsc_recalls · court_dockets · federal_register
-         the web            news_search (Google News) · web_search (a real headless browser, or Brave's API) · read
+         the web            news_search (Google News) · web_search (DuckDuckGo, then Bing; no API key) · read
                             read pulls exact quotes; each is checked word for word against the page
    │
    └─ report back: verdict (held to the evidence in code) · summary · what was searched · not found ·
@@ -24,8 +24,8 @@ A **coverage scout** (`mode: "coverage"`) looks for prior reporting of the whole
 
 Needs a model (`DEEPSEEK_API_KEY`, or `NEWSROOM_LLM_PROVIDER=claude_code`) and a search backend:
 
-- `NEWSROOM_SEARCH_BACKEND=browser`: a real local browser, free. Install it once with `pip install playwright` and `python -m playwright install chromium`. It searches Brave's web page first, then Bing, then DuckDuckGo. Any engine that answers with a bot check or with results unrelated to the query is skipped, never worked around.
-- or `BRAVE_API_KEY` for Brave's search API.
+- By default search needs no key: DuckDuckGo's lite and HTML pages over plain HTTP, then Bing in a headless browser (install once with `pip install playwright` and `python -m playwright install chromium`). Every newsroom process on the machine takes turns, one request per engine every 10 seconds. An engine that answers with a bot check is paused for everyone for ten minutes and never worked around; results unrelated to the query are thrown out.
+- `NEWSROOM_SEARCH_BACKEND=brave` with `BRAVE_API_KEY` uses Brave's search API instead. It is never used as a silent fallback.
 
 `nhtsa_investigations` reads NHTSA's investigations file from the local database: load it once with `python -m newsroom ingest-investigations`.
 

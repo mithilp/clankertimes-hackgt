@@ -125,7 +125,7 @@ def render(article: dict, sources: dict[str, dict], published: date) -> str:
 
 def publish(story_id: int, article: dict, sources: dict[str, dict], out_dir: Path, site: dict | None = None) -> Path:
     """Write the Markdown file, and the website's copy. site: extra fields for the site's document
-    (beats, reporting, council), passed to articles_store.to_document."""
+    (beats, timeline), passed to articles_store.to_document."""
     out_dir.mkdir(parents=True, exist_ok=True)
     slug = re.sub(r"[^a-z0-9]+", "-", article["headline"].lower()).strip("-")[:60]
     path = out_dir / f"{story_id:04d}-{slug}.md"
