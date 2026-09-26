@@ -2,14 +2,18 @@
 
 This plan turns the architecture in `ARCHITECTURE.md` into an execution-first build order for the hackathon.
 
-The core system flow is:
+The core system flow is hypothesis-first, the way an investigative desk works:
 
 ```text
-SCOUT
+TIPSTER          finds a story on its beat, writes a falsifiable hypothesis
   ↓
-MANAGING EDITOR
+MANAGING EDITOR  promotes or holds it
   ↓
-REPORTER
+REPORTER: PLAN   breaks the hypothesis into 3–6 sub-claims (core / supporting)
+  ↓
+SCOUTS           research the sub-claims in parallel, one scout each
+  ↓
+REPORTER: WRITE  rolls up the verdicts: draft / kill / follow-up / park
   ↓
 REVIEW PANEL
   ↓
@@ -20,9 +24,11 @@ DASHBOARD
 
 The goal is to build the **smallest complete newsroom loop first**, then add the more ambitious features.
 
-**Implementation notes.** The workers are Python (`newsroom/`), run as `python -m newsroom <role>`, against Postgres + pgvector running in Docker on the VM (`docker compose up`). The dashboard is Next.js and talks to the same database. Most later-stage features already exist in code; this plan decides the order in which they are **proven**, and config switches let the early milestones run with them turned down (one beat, one reporter slot, verifier only).
+**Implementation notes.** The workers are Python (`newsroom/`), run as `python -m newsroom <role>` (roles: `tipster`, `editor`, `reporter`, `scout`, `reviewer`), against Postgres + pgvector running in Docker on the VM (`docker compose up`). The dashboard is Next.js and talks to the same database. Most later-stage features already exist in code; this plan decides the order in which they are **proven**, and config switches let the early milestones run with them turned down (one beat, one reporter slot, verifier only).
 
-**Safety from the first run.** Three things are not enhancements and are on from the first reporter run: a hard spend cap (`SPEND_CAP_USD`), the named-private-person gate, and the mechanical quote check (Step 7).
+**Naming.** *Tipsters* discover stories and propose hypotheses (one per beat). *Scouts* research one sub-claim of a hypothesis each. The reporter plans (hypothesis → sub-claims) and writes (verdicts → story).
+
+**Safety from the first run.** Three things are not enhancements and are on from the first research run: a hard spend cap (`SPEND_CAP_USD`), the named-private-person gate, and the mechanical quote check (Step 7).
 
 ---
 
@@ -33,25 +39,27 @@ Implement in this order:
 ```text
 1. Database schema
 2. Shared event logger
-3. One scout
+3. One tipster
 4. Managing editor
-5. One reporter
-6. One verifier
-7. Publishing pipeline
-8. Dashboard
-9. Multiple scouts
-10. Full review panel
-11. mem0
-12. pgvector dedupe
-13. Budget appeals
-14. Wake conditions
+5. Reporter: plan (hypothesis → sub-claims)
+6. Scouts (one sub-claim each, in parallel)
+7. Reporter: roll-up and write
+8. One verifier
+9. Publishing pipeline
+10. Dashboard
+11. Multiple tipsters
+12. Full review panel
+13. mem0
+14. pgvector dedupe
+15. Budget appeals
+16. Wake conditions
 ```
 
-Do **not** start with full multi-agent orchestration.
+Do **not** start with full multi-agent orchestration: one beat, one story at a time, a couple of scout slots.
 
 The first major milestone is:
 
-> One scout discovers one lead, one reporter investigates it, one reviewer verifies it, and the story appears on the dashboard with citations.
+> One tipster raises one hypothesis, the reporter splits it into sub-claims, scouts resolve them, the reporter drafts from their facts, one reviewer verifies it, and the story appears on the dashboard with citations.
 
 If that works, the project works.
 
@@ -68,11 +76,10 @@ sources
 leads
 lead_sources
 stories
-evidence_plan
+sub_claims
 tool_calls
 facts
 claims
-budgets
 budget_appeals
 reviews
 agent_events
@@ -84,7 +91,7 @@ For the first version, implement only:
 sources
 leads
 stories
-evidence_plan
+sub_claims
 tool_calls
 facts
 claims
@@ -95,7 +102,6 @@ agent_events
 Delay:
 
 ```text
-budgets
 budget_appeals
 embeddings
 mem0
@@ -147,14 +153,19 @@ updated_at
 Story statuses:
 
 ```text
-assigned
-reporting
+assigned     (promoted, waiting for a reporter to plan it)
+planning     (reporter is splitting it into sub-claims)
+researching  (sub-claims are out with scouts)
+drafting     (every sub-claim resolved, waiting for a reporter to write)
+writing      (reporter is rolling up and drafting)
 in_review
 approved     (passed review, waiting for the deterministic publish gate)
 published
 killed
 dormant      (parked)
 ```
+
+Sub-claim statuses: `pending`, `researching`, then one verdict: `supported`, `contradicted`, `not_found`, `gated`.
 
 The `UNIQUE (lead_id)` constraint prevents duplicate stories from being created for the same lead.
 
@@ -178,11 +189,11 @@ Before building agents, you should be able to manually move a lead through:
 
 ```text
 create lead
-→ assign lead
-→ create story
-→ claim story
-→ move story to review
-→ publish story
+→ promote lead (story created)
+→ reporter claims story, writes sub-claims
+→ scouts claim sub-claims (exactly one scout per sub-claim)
+→ last verdict moves the story to drafting
+→ reporter writes claims → review → publish
 ```
 
 ---
@@ -201,7 +212,7 @@ Example:
 
 ```json
 {
-  "agent": "scout-local-gov",
+  "agent": "tipster:local-gov",
   "action": "search",
   "reason": "Looking for recently posted procurement awards",
   "detail": "Searching county purchasing portal"
@@ -230,7 +241,7 @@ and confirm the row appears in Postgres.
 
 ---
 
-# 4. Step 3 — Build One Scout
+# 4. Step 3 — Build One Tipster
 
 Start with **one beat only**.
 
@@ -240,7 +251,7 @@ Possible first beat:
 Atlanta / Georgia public records
 ```
 
-The scout loop:
+The tipster loop:
 
 ```text
 SEARCH
@@ -325,14 +336,14 @@ impact^0.30
 Running:
 
 ```bash
-python -m newsroom scout
+python -m newsroom tipster
 ```
 
 with a single beat in `config/beats.json` should insert at least one valid lead into Postgres.
 
 ## Quality Test
 
-Inserting a lead is not the bar; the leads have to be worth reporting. Run one scout for two or three cycles on a beat someone on the team knows, then rate 10 leads by hand:
+Inserting a lead is not the bar; the leads have to be worth reporting. Run one tipster for two or three cycles on a beat someone on the team knows, then rate 10 leads by hand:
 
 ```text
 specific and falsifiable?
@@ -340,7 +351,7 @@ settleable from public records within hours?
 not already covered by local outlets?
 ```
 
-If fewer than about half pass, fix the scout prompt before building on top of it. Every later stage inherits lead quality.
+If fewer than about half pass, fix the tipster prompt before building on top of it. Every later stage inherits lead quality.
 
 ---
 
@@ -414,72 +425,56 @@ Confirm they are routed correctly.
 
 ---
 
-# 6. Step 5 — Reporter
+# 6. Step 5 — Reporter Plan and Scouts
 
-The reporter is the core of the project.
-
-Do not simply prompt it with:
-
-> Research this story.
-
-Give it a structured loop:
+The reporter is not one long research loop. It works like an assigning editor:
 
 ```text
 LOAD hypothesis
      ↓
-CREATE evidence plan
+SPLIT into 3–6 sub-claims          (reporter: plan)
      ↓
-CHECK prior coverage
+DISPATCH each sub-claim            (all at once)
      ↓
-IDENTIFY gap
+SCOUT researches one sub-claim     (open tools, small budget)
      ↓
-CHOOSE next source
+RECORD facts with verbatim quotes
      ↓
-CALL tool
+RETURN a verdict
      ↓
-EXTRACT facts
-     ↓
-UPDATE evidence plan
-     ↓
-repeat
-     ↓
-CONFIRM / KILL / PARK
+ROLL UP when every sub-claim is back   (reporter: write, Step 9)
 ```
 
-## Evidence Plan
+## Sub-Claims
 
-Before searching, require the reporter to create a ranked evidence plan.
-
-Example:
+Each sub-claim is one checkable statement:
 
 ```json
-[
-  {
-    "source": "county contract database",
-    "priority": 1,
-    "reason": "Would establish contract amount",
-    "checked": false
-  },
-  {
-    "source": "commission meeting minutes",
-    "priority": 2,
-    "reason": "Could establish approval process",
-    "checked": false
-  }
-]
+{
+  "claim": "Resolution 26-R-3539 calls for a performance audit of the Housing Help Center",
+  "core": true,
+  "where_to_look": "council legislation system; the resolution text and exhibits",
+  "would_confirm": "resolution text naming the Housing Help Center and an audit",
+  "would_refute": "no such resolution, or one about something else"
+}
 ```
 
-Store these rows in:
+`core` means the hypothesis can't survive without it. Supporting sub-claims (prior coverage, the official response, what's next) make the story readable but don't decide it. Store them in `sub_claims`.
+
+## Scout Verdicts
 
 ```text
-evidence_plan
+supported     needs at least one recorded fact that supports it
+contradicted  needs at least one recorded fact that contradicts it
+not_found     looked where it should be; nothing
+gated         exists, but held by an office or person (name the records)
 ```
 
-This gives the reporter a concrete definition of what "done" means.
+A scout cannot mark a sub-claim supported or contradicted without its own evidence. This is what keeps coverage honest.
 
 ## Acceptance Test
 
-Given a manual lead, the reporter should create an evidence plan before making any search/browser call.
+Given a manual lead, the reporter produces 3–6 sub-claims with at least one core sub-claim before any search or browser call, and the story moves to `researching`. Two scouts racing for the same sub-claim: exactly one gets it.
 
 ---
 
@@ -549,24 +544,20 @@ Every page a tool fetches is archived as extracted text. A fact or claim is reje
 
 ---
 
-# 9. Step 8 — Reporter Stopping Rules
+# 9. Step 8 — Scout Stopping Rules
 
-Implement two stopping rules first.
+Stopping is per sub-claim, which keeps it simple: one question, a small budget.
 
-## Rule A — Evidence Coverage
+## Rule A — Coverage
 
-Stop when:
-
-```text
-all high-priority evidence_plan items have been checked
-```
+A story can't be written until **every** sub-claim has a verdict. That is structural, not a judgment call.
 
 ## Rule B — Diminishing Returns
 
 Track:
 
 ```text
-new facts per source
+new facts per page fetch, per sub-claim
 ```
 
 If:
@@ -575,72 +566,58 @@ If:
 last 5 page fetches (fetch_url / browse) → 0 relevant new facts
 ```
 
-stop. Searches don't count: records work often needs a search, a fetch and a browser visit before anything turns up.
+the scout should give its verdict. Searches don't count: records work often needs a search, a fetch and a browser visit before anything turns up.
 
-Do **not** build budget appeals yet, but do have a **hard cap** from the first run: a per-story research-call budget and the global `SPEND_CAP_USD`. Appeals come later; the cap does not.
+Do **not** build budget appeals yet, but do have a **hard cap** from the first run: a per-sub-claim research-call budget (default 10) and the global `SPEND_CAP_USD`. A scout that hits the cap without a verdict is recorded as `not_found`. Appeals come later; the cap does not.
 
 ---
 
-# 10. Step 9 — Story Resolution
+# 10. Step 9 — Roll-Up and Story Resolution
 
-The reporter must output exactly one:
+When the last sub-claim resolves, the story moves to `drafting`. Code, not the model, decides the outcome:
 
 ```text
-CONFIRMED
-KILLED
-PARKED
+any core sub-claim contradicted              → KILLED
+every core sub-claim supported               → draft (Step 10)
+core sub-claims unresolved, no follow-up yet → up to 3 follow-up sub-claims, back to scouts
+still unresolved after the follow-up round   → PARKED
 ```
 
-## Confirmed
-
-Enough public evidence supports the hypothesis.
+A follow-up that comes back supported or contradicted settles the core sub-claim it targets.
 
 ## Killed
 
-Evidence contradicts the hypothesis.
-
-Generate a:
-
-```text
-kill_memo
-```
-
-with:
+Generate a `kill_memo` with:
 
 ```text
 what was checked
 what was found
-why the hypothesis failed
+which part of the hypothesis failed, and why
 what evidence could change the conclusion
 ```
 
 ## Parked
 
-The evidence is not currently available or accessible.
+The evidence is not currently available or accessible. The wake condition names the exact records the unresolved sub-claims need. Parked is distinct from killed.
 
-Parked is distinct from killed.
+## Acceptance Test
+
+Feed the roll-up hand-made verdicts and confirm each row of the table above.
 
 ---
 
 # 11. Step 10 — Draft Generation
 
-Only confirmed stories proceed to drafting.
+Only stories whose core sub-claims are all supported proceed to drafting.
 
-Generate:
+The writer is given the scouts' facts, numbered. It generates:
 
 ```text
 headline
-body
-claims[]
+sentences[]  each citing exactly one fact number
 ```
 
-Every factual claim should include:
-
-```text
-text
-source URL
-quoted span
-```
+Each sentence's source URL and quoted span come from the fact it cites, so the draft **cannot** cite anything a scout didn't fetch and record. Structure: lede, why it matters, key facts and numbers, background and prior coverage, the official response on record, what happens next.
 
 Do not rely on model memory as evidence.
 
@@ -682,7 +659,7 @@ or:
 If blocked:
 
 ```text
-reporter revises once
+writer redrafts once from the same facts
 ```
 
 If blocked again:
@@ -781,6 +758,10 @@ Example:
 
 This makes the autonomy visible.
 
+## Screen 3b — Hypothesis Tree
+
+For each story: the hypothesis, its sub-claims turning green (supported), red (contradicted) or grey (not found / gated) as scouts report, and the facts behind each. This is the clearest picture of how the newsroom reasons.
+
 ## Screen 4 — Article
 
 Each sentence should expose:
@@ -797,28 +778,22 @@ Show the kill memo prominently.
 
 ---
 
-# 15. Step 14 — Add Multiple Scouts
+# 15. Step 14 — Add Multiple Tipsters
 
-Once one scout works reliably, add several beats.
+Once one tipster works reliably, add several beats.
 
 Example:
 
 ```text
-Scout 1 — local government
-Scout 2 — transportation
-Scout 3 — business/regulatory
-Scout 4 — Georgia Tech / education
+Tipster 1 — local government
+Tipster 2 — transportation
+Tipster 3 — business/regulatory
+Tipster 4 — Georgia Tech / education
 ```
 
-All scouts should write into the same:
+All tipsters write into the same `leads` table, and all stories share one scout pool. Scale scouts (`SCOUT_CONCURRENCY`, replicas) with the number of stories in flight.
 
-```text
-leads
-```
-
-table.
-
-Do not create separate orchestration systems for each scout.
+Do not create separate orchestration systems for each tipster.
 
 ---
 
@@ -982,10 +957,10 @@ browser calls
 wall-clock time
 ```
 
-When the reporter runs out:
+When a scout runs out on its sub-claim:
 
 ```text
-Reporter:
+Scout:
 "I want 5 more calls because I still need X,
 which could determine Y."
 
@@ -1026,9 +1001,9 @@ When triggered:
 ```text
 parked
   ↓
-assigned
+unresolved sub-claims reopened (pending)
   ↓
-reporting
+researching
 ```
 
 ---
@@ -1040,7 +1015,7 @@ For a 4-person team:
 | Person | Owns |
 |---|---|
 | 1 | Postgres, orchestration, state machine |
-| 2 | Scout and reporter agent logic |
+| 2 | Tipster, reporter (plan + write) and scout agent logic |
 | 3 | Search/browser tooling and reviewer agents |
 | 4 | Next.js dashboard and article UI |
 
@@ -1066,9 +1041,9 @@ dashboard skeleton on seeded data (parallel)
 ## Hours 2–5
 
 ```text
-one scout, one beat
+one tipster, one beat
 lead insertion + hard gates
-scout quality test (rate 10 leads by hand)
+tipster quality test (rate 10 leads by hand)
 editor triage
 story claiming
 ```
@@ -1076,10 +1051,10 @@ story claiming
 ## Hours 5–9
 
 ```text
-reporter (one slot)
-search, fetch, browser
-evidence plan
+reporter plan (hypothesis → sub-claims)
+scouts: search, fetch, browser, one sub-claim each
 facts + mechanical quote check
+roll-up
 spend cap on
 ```
 
@@ -1088,7 +1063,7 @@ spend cap on
 You should have:
 
 ```text
-Scout → Reporter → Result
+Tipster → Plan → Scouts → Roll-up result
 ```
 
 If not, stop adding features.
@@ -1106,11 +1081,11 @@ deterministic publish gate
 Target:
 
 ```text
-Scout
+Tipster
 ↓
 Editor
 ↓
-Reporter
+Plan → Scouts → Write
 ↓
 Verifier
 ↓
@@ -1123,7 +1098,7 @@ Run the MVP unattended for 1–2 hours with 2–3 beats. Watch it. Write down:
 
 ```text
 lead scores vs. which leads were actually good (tune PROMOTE_THRESHOLD)
-reporters stopping too early or too late (tune stopping rules)
+scouts giving verdicts too early or too late (tune budgets and stopping rules)
 what broke
 ```
 
@@ -1136,7 +1111,7 @@ In priority order; drop from the bottom:
 ```text
 fixes from the trial run
 dashboard: timeline, lead queue, story page, kill memos
-multiple scouts
+multiple tipsters
 full review panel (skeptic, fairness)
 dedupe (pgvector + editor confirmation)
 notifications (LISTEN/NOTIFY)
@@ -1171,25 +1146,26 @@ prepare the demo walkthrough
 - [ ] API keys set on the box (Anthropic, Brave)
 - [ ] Spend cap set
 - [ ] Events can be logged
-- [ ] Scout creates a valid hypothesis
-- [ ] Scout passes the quality test (at least half of 10 leads usable)
+- [ ] Tipster creates a valid hypothesis
+- [ ] Tipster passes the quality test (at least half of 10 leads usable)
 - [ ] Named-private-person gate rejects a test lead
 - [ ] Lead is scored
 - [ ] Editor promotes or holds it
 - [ ] Reporter atomically claims it
-- [ ] Reporter writes evidence plan
-- [ ] Reporter searches the web
+- [ ] Reporter splits it into sub-claims
+- [ ] Scouts claim sub-claims atomically and research in parallel
+- [ ] Scouts search the web
 - [ ] Tool reasons are logged
 - [ ] Facts are stored
 - [ ] Claims include sources and quoted spans
 - [ ] Quote check rejects a paraphrased span
-- [ ] Reporter confirms, kills, or parks
+- [ ] Roll-up confirms, kills, sends follow-ups, or parks
 - [ ] Verifier checks claims
 - [ ] Story publishes through the deterministic gate
 - [ ] Trial run done, threshold tuned
 - [ ] Dashboard displays investigation timeline
 - [ ] Kill memo displays
-- [ ] Multiple scouts work
+- [ ] Multiple tipsters work
 - [ ] Reviewer panel works
 - [ ] Deduplication works
 - [ ] mem0 works
@@ -1199,7 +1175,7 @@ prepare the demo walkthrough
 The critical breakpoint is:
 
 ```text
-Scout → Editor → Reporter → Verifier → Published Story
+Tipster → Editor → Plan → Scouts → Write → Verifier → Published Story
 ```
 
 Everything after that is enhancement.
