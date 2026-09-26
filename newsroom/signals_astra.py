@@ -14,7 +14,7 @@ from __future__ import annotations
 import os
 import uuid
 from dataclasses import fields
-from datetime import datetime
+from datetime import datetime, timezone
 
 from astrapy import DataAPIClient
 from astrapy.constants import VectorMetric
@@ -64,7 +64,8 @@ def definition() -> CollectionDefinition:
 
 
 def _at(timestamp: str) -> datetime:
-    return datetime.fromisoformat(timestamp)
+    at = datetime.fromisoformat(timestamp)
+    return at if at.tzinfo else at.replace(tzinfo=timezone.utc)   # Astra refuses naive datetimes
 
 
 class AstraSignals:
