@@ -33,6 +33,9 @@ PRICES = {
     "claude-opus-5": (5.00, 25.00),
     "claude-sonnet-5": (2.00, 10.00),
     "claude-haiku-4-5": (1.00, 5.00),
+    # DeepSeek peak-hour prices (off-peak is half), cache-miss input. Conservative for the spend cap.
+    "deepseek-flash": (0.30, 1.20),
+    "deepseek-v4-pro": (1.32, 3.96),
 }
 
 
@@ -40,9 +43,11 @@ PRICES = {
 class Settings:
     database_url: str = os.getenv("DATABASE_URL", "postgresql://newsroom:newsroom@localhost:5432/newsroom")
     brave_api_key: str = os.getenv("BRAVE_API_KEY", "")
-    # "anthropic" (default) or "gemini" (Google AI Studio; set MODEL_* to Gemini model ids).
+    # "anthropic" (default), "gemini" (Google AI Studio) or "deepseek". Set MODEL_* to that provider's ids.
     provider: str = os.getenv("LLM_PROVIDER", "anthropic")
     gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+    deepseek_api_key: str = os.getenv("DEEPSEEK_API_KEY", "")
+    deepseek_base_url: str = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
     archive_dir: Path = Path(os.getenv("ARCHIVE_DIR", "./archive"))
     beats_file: Path = Path(os.getenv("BEATS_FILE", "./config/beats.json"))
     worker_id: str = os.getenv("WORKER_ID", f"{socket.gethostname()}-{os.getpid()}")

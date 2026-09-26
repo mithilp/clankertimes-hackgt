@@ -64,7 +64,7 @@ services:
     command: reporter
     environment:
       DATABASE_URL: postgresql://newsroom:newsroom@db:5432/newsroom
-      REPORTER_CONCURRENCY: "2"
+      REPORTER_CONCURRENCY: "${REPORTER_CONCURRENCY:-2}"
     deploy:
       replicas: 1
 
@@ -73,7 +73,7 @@ services:
     command: scout
     environment:
       DATABASE_URL: postgresql://newsroom:newsroom@db:5432/newsroom
-      SCOUT_CONCURRENCY: "4"
+      SCOUT_CONCURRENCY: "${SCOUT_CONCURRENCY:-4}"
     deploy:
       replicas: 2
 
@@ -82,7 +82,7 @@ services:
     command: reviewer
     environment:
       DATABASE_URL: postgresql://newsroom:newsroom@db:5432/newsroom
-      REVIEWER_CONCURRENCY: "2"
+      REVIEWER_CONCURRENCY: "${REVIEWER_CONCURRENCY:-2}"
     deploy:
       replicas: 1
 

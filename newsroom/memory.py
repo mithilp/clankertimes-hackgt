@@ -25,11 +25,14 @@ _embedder = None
 
 def _mem0_config() -> dict:
     return {
-        "llm": (
-            {"provider": "gemini", "config": {"model": settings.models.memory, "api_key": settings.gemini_api_key}}
-            if settings.provider == "gemini"
-            else {"provider": "anthropic", "config": {"model": settings.models.memory, "max_tokens": 2000}}
-        ),
+        "llm": {
+            "gemini": {"provider": "gemini",
+                       "config": {"model": settings.models.memory, "api_key": settings.gemini_api_key}},
+            "deepseek": {"provider": "deepseek",
+                         "config": {"model": settings.models.memory, "api_key": settings.deepseek_api_key,
+                                    "deepseek_base_url": settings.deepseek_base_url}},
+        }.get(settings.provider,
+              {"provider": "anthropic", "config": {"model": settings.models.memory, "max_tokens": 2000}}),
         "embedder": {"provider": "fastembed", "config": {"model": EMBED_MODEL, "embedding_dims": EMBED_DIMS}},
         "vector_store": {
             "provider": "pgvector",
