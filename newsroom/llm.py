@@ -30,6 +30,10 @@ class Refused(Exception):
     pass
 
 
+class QuotaExhausted(Exception):
+    """The provider's daily quota is used up. Retrying won't help until it resets."""
+
+
 def _request_kwargs(model: str) -> dict:
     if model.startswith("claude-opus"):
         return {"betas": [_FALLBACK_BETA], "fallbacks": "default"}

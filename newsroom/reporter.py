@@ -12,7 +12,7 @@ from datetime import datetime, timedelta, timezone
 
 from . import db, memory, web
 from .config import settings
-from .llm import AgentContext, Refused, Tool, run_agent
+from .llm import AgentContext, QuotaExhausted, Refused, Tool, run_agent
 from .tools import research_tools
 
 log = logging.getLogger(__name__)
@@ -89,7 +89,8 @@ async def _plan_state(story_id) -> dict:
 
 
 class StoryWork:
-    def __init__(self, story, worker: str):
+    def __init__(self, story, worker: str, lease: dict | None = None):
+        self.lease = lease if lease is not None else {"held": True}
         self.story = story
         self.worker = worker
         self.ctx = AgentContext(agent=f"reporter:{worker}", story_id=story["id"], lead_id=story["lead_id"])
@@ -333,6 +334,9 @@ class StoryWork:
             parts.append("This story is being resumed. Continue from the state above rather than starting over.")
         return "\n\n".join(parts)
 
+    async def _still_held(self) -> bool:
+        return self.lease["held"]
+
     async def run(self) -> None:
         task = await self.task()
         b = await _budget_state(self.story["id"])
@@ -340,7 +344,7 @@ class StoryWork:
         await run_agent(
             self.ctx, model=settings.models.reporter, system=SYSTEM, task=task, tools=self.tools(),
             max_turns=b["granted"] + 40, effort="high", on_turn=self.on_turn,
-            heartbeat=lambda: db.heartbeat(self.story["id"], self.worker),
+            heartbeat=self._still_held,
         )
         if not self.ctx.done and self.ctx.outcome != "lease_lost":
             await self.park({"wake_condition": "reporter stopped without resolving",
@@ -356,7 +360,13 @@ async def slot(n: int, waker: db.Waker) -> None:
             if story is None:
                 await waker.wait(10)
                 continue
-            await StoryWork(story, worker).run()
+            async with db.lease_keeper(story["id"], worker) as lease:
+                await StoryWork(story, worker, lease).run()
+        except QuotaExhausted as e:
+            log.warning("%s; handing the story back and pausing 15 min", e)
+            if story:
+                await db.release(story["id"], worker, status="assigned")
+            await asyncio.sleep(900)
         except Refused as e:
             log.warning("reporter refused: %s", e)
             if story:

@@ -164,6 +164,34 @@ async def heartbeat(story_id, owner: str) -> bool:
     return res.endswith(" 1")
 
 
+@contextlib.asynccontextmanager
+async def lease_keeper(story_id, owner: str) -> AsyncIterator[dict]:
+    """Renew the lease in the background for as long as the work runs.
+
+    Renewal must not depend on the agent loop: a single model call can sit in rate-limit
+    retries for minutes, and a lapsed lease hands the story to a second worker.
+    Yields {"held": bool}; it flips to False if the lease is lost.
+    """
+    state = {"held": True}
+
+    async def renew() -> None:
+        while True:
+            await asyncio.sleep(settings.lease_seconds / 3)
+            try:
+                if not await heartbeat(story_id, owner):
+                    state["held"] = False
+                    log.warning("lease on %s lost by %s", story_id, owner)
+                    return
+            except Exception as e:  # noqa: BLE001 - a DB blip shouldn't kill the renewer
+                log.warning("lease renewal failed (%s); retrying", e)
+
+    task = asyncio.create_task(renew())
+    try:
+        yield state
+    finally:
+        task.cancel()
+
+
 async def release(story_id, owner: str, **fields: Any) -> bool:
     """Write final fields and drop the lease, only if we still hold it."""
     p = await pool()

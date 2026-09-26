@@ -23,6 +23,7 @@ TEST_DB = parts.path.lstrip("/") + "_acceptance"
 TEST_URL = urlunsplit(parts._replace(path="/" + TEST_DB))
 os.environ["DATABASE_URL"] = TEST_URL  # before importing newsroom, which reads settings at import
 os.environ.setdefault("ARCHIVE_DIR", "/tmp/acceptance-archive")
+os.environ["LEASE_SECONDS"] = "6"  # short leases so the lease tests run in seconds
 
 from newsroom import __main__ as cli, db, editor, web  # noqa: E402
 from newsroom.scoring import fingerprint  # noqa: E402
@@ -88,6 +89,23 @@ async def step1_state_machine(p) -> None:
     check("timeline written", bool(row["timeline"]))
 
 
+async def lease_renewal(p) -> None:
+    print("Leases: a busy worker keeps its story; a dead one loses it")
+    lead_id = await insert_lead(p, "Test County paid Vendor C $2M on an expired contract", 0.80)
+    await editor.triage_leads()
+    sid = await p.fetchval("select id from stories where lead_id = $1", lead_id)
+    mine = await db.claim_story(["assigned"], "reporting", "worker-busy")
+    check("worker claims the story", mine is not None and mine["id"] == sid)
+    async with db.lease_keeper(sid, "worker-busy") as lease:
+        await asyncio.sleep(10)  # longer than the 6s lease: e.g. stuck in rate-limit retries
+        stolen = await db.claim_story(["assigned"], "reporting", "worker-other")
+        check("while renewing, nobody else can take it", stolen is None and lease["held"])
+    await asyncio.sleep(8)  # renewer stopped (worker died): lease lapses
+    taken = await db.claim_story(["assigned"], "reporting", "worker-other")
+    check("after the lease lapses, another worker resumes it", taken is not None and taken["id"] == sid)
+    await db.release(sid, "worker-other", status="killed")
+
+
 async def step2_events(p) -> None:
     print("Step 2: event logging")
     await db.event("test", "hello", "checking the event log", detail={"n": 1})
@@ -121,6 +139,7 @@ async def main() -> int:
         await cli.initdb()
         p = await db.pool()
         await step1_state_machine(p)
+        await lease_renewal(p)
         await step2_events(p)
         await step4_triage(p)
         await p.close()

@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from . import db
 from .config import settings
-from .llm import AgentContext, Refused, Tool, TurnHook, _run_tool
+from .llm import AgentContext, QuotaExhausted, Refused, Tool, TurnHook, _run_tool
 
 log = logging.getLogger(__name__)
 T = TypeVar("T", bound=BaseModel)
@@ -39,9 +39,12 @@ async def _generate(model: str, contents, config: types.GenerateContentConfig) -
             async with _slots:
                 return await client().aio.models.generate_content(model=model, contents=contents, config=config)
         except errors.APIError as e:
+            if e.code == 429 and "PerDay" in str(e.details):
+                raise QuotaExhausted(f"{model}: daily free-tier quota used up") from e
             if e.code not in (429, 500, 503) or attempt == 7:
                 raise
-            log.warning("gemini %s (%s); retrying in %.0fs", e.code, e.status, delay)
+            quota = next((q for q in ("PerDay", "PerMinute") if q in str(e.details)), "")
+            log.warning("gemini %s %s %s; retrying in %.0fs", e.code, e.status, quota, delay)
             await asyncio.sleep(delay)
             delay = min(delay * 2, 120)
     raise RuntimeError("unreachable")

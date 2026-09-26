@@ -10,7 +10,7 @@ from pydantic import BaseModel
 
 from . import db, memory, web
 from .config import settings
-from .llm import Refused, structured
+from .llm import QuotaExhausted, Refused, structured
 
 log = logging.getLogger(__name__)
 
@@ -135,7 +135,13 @@ async def slot(n: int, waker: db.Waker) -> None:
             if story is None:
                 await waker.wait(10)
                 continue
-            await review_story(story, worker)
+            async with db.lease_keeper(story["id"], worker):
+                await review_story(story, worker)
+        except QuotaExhausted as e:
+            log.warning("%s; handing the story back and pausing 15 min", e)
+            if story:
+                await db.release(story["id"], worker, status="in_review")
+            await asyncio.sleep(900)
         except Refused as e:
             log.warning("reviewer refused: %s", e)
             if story:
