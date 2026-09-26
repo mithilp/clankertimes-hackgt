@@ -1,0 +1,9 @@
+.env
+.git
+.claude
+__pycache__
+venv
+.venv
+archive
+.models
+.mem0

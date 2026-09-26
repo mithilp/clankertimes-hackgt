@@ -1,0 +1,11 @@
+anthropic==1.8.0
+asyncpg==0.31.0
+httpx>=0.28
+trafilatura>=2.0
+pypdf>=5.0
+fastembed==0.8.1
+mem0ai==2.2.1
+psycopg[binary]>=3.2
+psycopg-pool>=3.2
+pydantic>=2.7
+playwright==1.63.0
