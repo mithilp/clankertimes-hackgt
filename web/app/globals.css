@@ -141,6 +141,12 @@ p { margin: 0; }
 .article h1 { font-size: clamp(32px, 4.6vw, 46px); line-height: 1.08; letter-spacing: -0.012em; }
 .article .dek { font-size: 21px; line-height: 1.45; color: var(--ink-2); }
 .byline { display: grid; gap: 3px; border-top: 1px solid var(--rule); padding-top: 12px; }
+.share { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 16px; font-family: var(--sans); font-size: 13px; }
+.share .label { color: var(--muted); font-size: 11px; }
+.share a, .share button { color: var(--ink-2); background: none; border: 0; padding: 0; font: inherit; cursor: pointer; }
+.share a:hover, .share button:hover { color: var(--link); text-decoration: underline; text-underline-offset: 3px; }
+.article .share { padding-top: 10px; }
+.notes .share { border-top: 1px solid var(--rule); padding-top: 14px; }
 .byline .who { font-family: var(--sans); font-size: 14px; font-weight: 600; }
 
 .body p { font-size: 20px; line-height: 1.65; margin-bottom: 22px; color: #1a1a1a; }
@@ -177,20 +183,6 @@ p { margin: 0; }
 .sources a { color: var(--link); overflow-wrap: anywhere; font-family: var(--sans); font-size: 12.5px; }
 .sources li:target { background: #efe9d8; }
 
-.checks { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
-.checks li { display: grid; grid-template-columns: 118px minmax(0, 1fr); gap: 12px; font-size: 16px; }
-.result { font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; padding-top: 4px; }
-.result.supported { color: var(--good); }
-.result.unclear, .result.not-established { color: var(--muted); }
-.result.contradicted { color: var(--bad); }
-.checks .note { color: var(--muted); font-size: 14.5px; }
-.hyp { font-size: 17px; font-style: italic; color: var(--ink-2); }
-.council { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.council div { display: grid; gap: 4px; align-content: start; font-size: 15px; }
-.council .v { font-family: var(--sans); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
-.council .v.approve { color: var(--good); }
-.council .v.revise { color: var(--bad); }
-@media (max-width: 600px) { .council { grid-template-columns: 1fr; } .checks li { grid-template-columns: 1fr; gap: 2px; } }
 .fine { font-size: 15px; color: var(--ink-2); }
 
 /* ---- about ---- */

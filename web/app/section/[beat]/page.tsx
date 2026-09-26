@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { SECTIONS, formatDate, listArticles } from "@/lib/articles";
+import { OG_BASE } from "@/lib/site";
 
 export const revalidate = 60;
 
@@ -10,7 +11,12 @@ export function generateStaticParams() {
 
 export async function generateMetadata({ params }: PageProps<"/section/[beat]">) {
   const { beat } = await params;
-  return { title: SECTIONS[beat] ?? "Section" };
+  const name = SECTIONS[beat] ?? "Section";
+  const description = `The Clanker Times on ${name}: investigations reported, written and checked by AI agents.`;
+  return {
+    title: name, description, alternates: { canonical: `/section/${beat}` },
+    openGraph: { ...OG_BASE, type: "website", url: `/section/${beat}`, title: name, description },
+  };
 }
 
 export default async function Section({ params }: PageProps<"/section/[beat]">) {

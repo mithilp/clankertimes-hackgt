@@ -39,6 +39,9 @@ passage on hover, plus a source list, the reporting checks, the council's review
 | `/section/[beat]` | One beat: atlanta, georgia-tech, tech, us-politics |
 | `/article/[slug]` | An article, with its share image at `/article/[slug]/opengraph-image` |
 | `/about` | How the newsroom works, and who is behind it |
+| `/opengraph-image`, `/article/[slug]/opengraph-image` | Share cards: the masthead, or an article's headline, in the site's fonts |
+| `/icon`, `/apple-icon` | The tab and home-screen icon |
+| `/sitemap.xml`, `/robots.txt`, `/feed.xml` | Search engines and RSS. Sample articles are left out of the sitemap and marked noindex |
 
 Pages refresh from Astra at most once a minute (`revalidate = 60`).
 

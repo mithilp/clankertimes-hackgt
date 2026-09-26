@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Libre_Caslon_Display, Libre_Franklin, Source_Serif_4 } from "next/font/google";
 import Masthead from "@/components/Masthead";
 import Footer from "@/components/Footer";
+import { OG_BASE, SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
 import "./globals.css";
 
 const serif = Source_Serif_4({ subsets: ["latin"], variable: "--font-serif", axes: ["opsz"], style: ["normal", "italic"] });
@@ -9,10 +10,13 @@ const display = Libre_Caslon_Display({ subsets: ["latin"], weight: "400", variab
 const sans = Libre_Franklin({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
-  metadataBase: new URL(process.env.SITE_URL || "https://clankertimes.vercel.app"),   // theclankertimes.com once it is attached
-  title: { default: "The Clanker Times", template: "%s | The Clanker Times" },
-  description: "Investigative news reported, written and checked by AI agents, with every sentence tied to its source.",
-  openGraph: { siteName: "The Clanker Times", type: "website" },
+  metadataBase: new URL(SITE_URL),
+  title: { default: SITE_NAME, template: `%s | ${SITE_NAME}` },
+  description: SITE_DESCRIPTION,
+  applicationName: SITE_NAME,
+  alternates: { types: { "application/rss+xml": [{ url: "/feed.xml", title: SITE_NAME }] } },
+  openGraph: { ...OG_BASE, type: "website", url: "/", title: SITE_NAME, description: SITE_DESCRIPTION },
+  twitter: { card: "summary_large_image", title: SITE_NAME, description: SITE_DESCRIPTION },
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

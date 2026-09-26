@@ -1,24 +1,45 @@
 import { ImageResponse } from "next/og";
-import { getArticle } from "@/lib/articles";
+import { SECTIONS, formatDate, getArticle, sourceOrder } from "@/lib/articles";
+import { INK, MUTED, PAPER, RULE, cardFonts } from "@/lib/og";
+import { smart } from "@/lib/text";
 
 export const size = { width: 1200, height: 630 };
 export const contentType = "image/png";
-export const alt = "The Clanker Times";
+export const alt = "Article headline from The Clanker Times";
 
-// The preview card when an article is shared: the headline on newsprint.
+// The card when an article is shared: masthead, section, the headline, and how many records it cites.
 export default async function Image({ params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   const article = await getArticle(slug);
-  const headline = article?.headline ?? "The Clanker Times";
+  const headline = smart(article?.headline ?? "The Clanker Times");
+  const section = (article && (SECTIONS[article.beats[0]] ?? "")) || "";
+  const kicker = [section, article?.kicker].filter(Boolean).join(" · ").toUpperCase();
+  const foot = article
+    ? `${formatDate(article.published_at)} · ${sourceOrder(article).length} sources cited${article.sample ? " · Sample article" : ""}`
+    : "";
+  const byline = "Reported, written and checked by AI agents";
+  const fonts = await cardFonts("The Clanker Times" + headline + kicker + foot + byline);
+  const fontSize = headline.length > 110 ? 52 : headline.length > 80 ? 60 : 70;
+
   return new ImageResponse(
     (
-      <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", justifyContent: "space-between",
-                    background: "#fbfaf6", color: "#121212", padding: "64px 72px" }}>
-        <div style={{ display: "flex", fontSize: 30, borderBottom: "2px solid #121212", paddingBottom: 18 }}>The Clanker Times</div>
-        <div style={{ display: "flex", fontSize: headline.length > 90 ? 52 : 64, lineHeight: 1.12, fontWeight: 700 }}>{headline}</div>
-        <div style={{ display: "flex", fontSize: 24, color: "#6b6a66" }}>Reported, written and checked by AI agents</div>
+      <div style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", background: PAPER,
+                    color: INK, padding: "56px 72px 52px" }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-end",
+                      borderBottom: `3px solid ${INK}`, paddingBottom: 16 }}>
+          <div style={{ display: "flex", fontFamily: "Caslon", fontSize: 44, lineHeight: 1 }}>The Clanker Times</div>
+          <div style={{ display: "flex", fontFamily: "Sans", fontWeight: 600, fontSize: 18, letterSpacing: 2, color: MUTED }}>{kicker}</div>
+        </div>
+        <div style={{ display: "flex", flex: 1, alignItems: "center" }}>
+          <div style={{ display: "flex", fontFamily: "Serif", fontWeight: 700, fontSize, lineHeight: 1.1, letterSpacing: -0.5 }}>{headline}</div>
+        </div>
+        <div style={{ display: "flex", justifyContent: "space-between", borderTop: `1px solid ${RULE}`, paddingTop: 16,
+                      fontFamily: "Sans", fontWeight: 600, fontSize: 20, color: MUTED }}>
+          <div style={{ display: "flex" }}>{byline}</div>
+          <div style={{ display: "flex" }}>{foot}</div>
+        </div>
       </div>
     ),
-    size,
+    { ...size, fonts },
   );
 }
