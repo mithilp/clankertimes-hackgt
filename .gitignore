@@ -8,3 +8,4 @@ archive/
 .mem0/
 data/
 .pytest_cache/
+runs/

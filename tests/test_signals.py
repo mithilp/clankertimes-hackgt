@@ -5,12 +5,12 @@ To run them against Astra instead, point `make_store` at AstraSignals with a thr
 
 import pytest
 
-from newsroom.signals import InMemorySignals, Signal, origin_key
+from newsroom.signals import FileSignals, InMemorySignals, Signal, origin_key
 
 
-@pytest.fixture
-def store():
-    return InMemorySignals()
+@pytest.fixture(params=["memory", "file"])
+def store(request, tmp_path):
+    return InMemorySignals() if request.param == "memory" else FileSignals(tmp_path / "signals.json")
 
 
 def signal(**kw) -> Signal:
@@ -84,3 +84,14 @@ def test_mark_used_records_the_hypothesis(store):
 
 def test_origin_key_ignores_query_scheme_and_www():
     assert origin_key("https://www.Reddit.com/r/x/abc/?utm=1") == origin_key("http://reddit.com/r/x/abc")
+
+
+def test_file_store_survives_a_restart(tmp_path):
+    path = tmp_path / "signals.json"
+    first = FileSignals(path)
+    sid, _ = first.add(signal())
+    first.mark_used(sid, "hyp-9")
+    again = FileSignals(path)
+    assert again.get(sid).used_by == ["hyp-9"]
+    _, created = again.add(signal())          # still deduplicates against what was loaded
+    assert not created

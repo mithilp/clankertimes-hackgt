@@ -20,10 +20,32 @@ Bossman ──> vector DB ──> McLovin ──> Reporter ──> Council ─�
 | [council/virality](council/virality/) | Will people care and share it? |
 | [council/novelty](council/novelty/) | Is this actually new, or did someone already report it? |
 
+## Running agents individually
+
+Every agent runs on its own with `python -m newsroom try <agent>`, and each folder has a `RUN.md` with the details:
+
+| Agent | Command | How-to |
+|---|---|---|
+| Bossman | `try bossman [--sources ...] [--replay FILE] [--loop MIN]` | [bossman/RUN.md](bossman/RUN.md) |
+| McLovin | `try mclovin [--hours N] [--input FILE]` | [mclovin/RUN.md](mclovin/RUN.md) |
+| Reporter | `try reporter --from-mclovin FILE --pick N` or `--hypothesis "..."` | [reporter/RUN.md](reporter/RUN.md) |
+| Scout | `try scout --hypothesis "..." --context "..."` | [scout/RUN.md](scout/RUN.md) |
+| Council | `try council [--draft FILE] [--judges ...] [--seeded]` | [council/RUN.md](council/RUN.md) |
+
+They chain through files and the signals store, so this runs the whole path one step at a time:
+
+```bash
+.venv/bin/python -m newsroom try bossman --sources google_trends,reddit,gov
+.venv/bin/python -m newsroom try mclovin
+.venv/bin/python -m newsroom try reporter --from-mclovin runs/mclovin/<timestamp>/hypotheses.json --pick 1
+.venv/bin/python -m newsroom try council --seeded
+```
+
 ## What's in each folder
 
 | File | Purpose |
 |---|---|
+| `RUN.md` | How to run this agent on its own |
 | `playbook.md` | How to do the job: the method, the rules, what to avoid. Seeded from research into how investigative journalism actually works and how it fails |
 | `rubric.md` | How to tell good output from bad, as checkable criteria. Without this, "is it better now?" is a vibe |
 | `examples/good/` | Worked examples of doing the job well. Traces (the path taken), not just polished output |

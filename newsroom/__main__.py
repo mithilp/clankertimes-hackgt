@@ -9,7 +9,7 @@ from pathlib import Path
 import httpx
 import openai
 
-from . import claims, config, count, db, hunt, llm, reporter, web
+from . import claims, config, count, db, hunt, llm, reporter, tryit, web
 from .sources import bluesky, caers, faers, maude, nhtsa, osha
 
 SOURCES = ["nhtsa", "maude", "faers", "caers", "osha", "bluesky"]
@@ -85,7 +85,12 @@ def main(argv: list[str] | None = None) -> None:
     sub.add_parser("stories", help="list stories and their status")
     sub.add_parser("usage", help="DeepSeek tokens used so far")
 
+    tryit.add_parser(sub)
+
     args = parser.parse_args(argv)
+    if args.command == "try":
+        sys.stdout.reconfigure(encoding="utf-8")
+        return tryit.main(args)
     settings = config.load()
     sys.stdout.reconfigure(encoding="utf-8")  # Windows terminals otherwise garble curly quotes
     with db.session() as conn:
