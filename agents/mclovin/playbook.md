@@ -31,6 +31,7 @@ If you can't fill `would_settle_it`, it isn't ready.
 
 - **Similarity is not sameness.** Vector search groups things that are *about* the same subject, not things that *claim* the same thing. Two different defects in one product will embed close together. Group by claim, then check.
 - **Count distinct origins, not items.** Forty posts repeating one viral thread is one source. Group by where the claim started, then count those. ([NPR accuracy standards](https://www.npr.org/about-npr/688139552/accuracy))
+- **Signals from the records are already counted.** Signals whose `source_types` include `gov` come from `record-signals`: a spike in one official database, or one recall or investigation. Each is **one origin**, however many reports it counts; the count is in its summary, and its `spike` holds the latest numbers. A complaint spike and a web signal about the same product are two independent origins, which is exactly the pattern worth finding.
 - **Report exact numbers.** "15 owners," never "many owners." The counts are known, so vagueness is a choice to be less accurate.
 
 ## Patterns worth looking for
