@@ -19,5 +19,6 @@ RUN python -c "from fastembed import TextEmbedding; TextEmbedding('BAAI/bge-smal
 COPY newsroom ./newsroom
 COPY db ./db
 COPY config ./config
+COPY scripts ./scripts
 
 ENTRYPOINT ["python", "-m", "newsroom"]
