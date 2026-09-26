@@ -54,3 +54,7 @@ These are the shapes that real records-based investigations take:
 ## When to promote
 
 Send a hypothesis to a Reporter when it has: a filled `would_settle_it`, at least a few distinct origins or one strong official record, and an accountable party. Otherwise keep watching it; the next batch of data may tip it.
+
+**Settleable today, from records online.** Our reporters have public websites and databases, not records requests: SEC EDGAR, EMMA, the Federal Register, court dockets, agency enforcement lists, auditors' reports, budgets, agendas, IRS 990s, NHTSA, FDA and CPSC files. Promote a hypothesis only when at least one record in `would_settle_it` is published online now. If settling it needs a FOIA or open-records request, internal logs or a leak, keep it on the watch list and say which request would settle it.
+
+**Aim at a finding nobody has published.** The strongest hypotheses (see the guide below) put two public records side by side that disagree, compute a number nobody has computed, or hold a promise against what happened. A hypothesis whose answer is already in a news story is a rehash: check the signals' own sources before promoting it.
