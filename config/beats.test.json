@@ -1,0 +1,8 @@
+[
+  {
+    "id": "atl-city-hall",
+    "name": "Atlanta City Hall",
+    "description": "City council and mayor's office: contracts, procurement, spending, ordinances, audits, and whether the city does what it said it would.",
+    "starting_points": ["council agendas and minutes", "city procurement and bid awards", "city auditor reports", "budget amendments"]
+  }
+]
