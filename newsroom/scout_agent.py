@@ -298,7 +298,8 @@ class Scout:
 
     def run(self) -> dict:
         system = self.system + "\n" + STEP.format(max_calls=MAX_CALLS_PER_STEP, tools=self._tools_text())
-        allowed = set(COVERAGE_TOOLS if self.mode == "coverage" else TOOLS)
+        # A task may narrow the tools, e.g. a coverage scout sent back out with news search only.
+        allowed = set(self.task.get("tools") or (COVERAGE_TOOLS if self.mode == "coverage" else TOOLS))
         idle = 0
         while self.used < self.budget and idle < 2:
             reply = llm.ask_json(system, self._state(), model=self.fast, max_tokens=1500)

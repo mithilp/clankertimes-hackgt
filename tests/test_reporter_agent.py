@@ -577,3 +577,22 @@ def test_a_story_whose_coverage_could_not_be_checked_is_not_written(env, monkeyp
     with pytest.raises(reporter_agent.CoverageUnknown):
         run(write=True)
     assert reporter_agent.coverage_checked([SEARCHED]) and not reporter_agent.coverage_checked([])
+
+
+def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(env, monkeypatch):
+    monkeypatch.setattr(llm, "ask_json", FakeModel())
+    tasks = []
+    fake_scouts(monkeypatch)
+    real = reporter_agent.scout_agent.run
+
+    def run_scout(task, **kw):
+        if task.get("mode") == "coverage":
+            tasks.append(task)
+            if len(tasks) == 1:          # first time out: every search unavailable
+                return {"findings": [], "report": {"coverage": []},
+                        "trail": [{"tool": "web_search", "arg": "x", "why": "", "result": f"{scout_agent.UNAVAILABLE}: paused"}]}
+            return {"findings": [], "report": {"coverage": [], "status": "new"}, "trail": [SEARCHED]}
+        return real(task, **kw)
+    monkeypatch.setattr(reporter_agent.scout_agent, "run", run_scout)
+    run(write=False)
+    assert len(tasks) == 2 and tasks[1]["tools"] == ["news_search", "read", "db_signals"]

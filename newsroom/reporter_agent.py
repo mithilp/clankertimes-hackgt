@@ -551,6 +551,21 @@ class Investigation:
         except Exception as e:  # noqa: BLE001 - no coverage report means the plan says so, not a failed story
             self.coverage = {"findings": [], "trail": [], "report": {"coverage": [], "summary": f"coverage scout failed: {e}"}}
         if not coverage_checked(self.coverage.get("trail", [])):
+            # Web search is often paused (DuckDuckGo bot checks). Google News doesn't depend on it: send the
+            # coverage scout out once more with news search, reading and the newsroom's DB only.
+            self.say("  coverage scout: no search ran; going out again with news search only")
+            first = self.coverage
+            try:
+                again = scout_agent.run({**task, "tools": ["news_search", "read", "db_signals"]},
+                                        budget=max(MIN_BUDGET, self.budget // 2), context=self._context(),
+                                        leads=self.leads, say=self.say)
+                self.coverage = {**again, "trail": first.get("trail", []) + again.get("trail", []),
+                                 "findings": first.get("findings", []) + again.get("findings", [])}
+            except web.SearchError:
+                raise
+            except Exception as e:  # noqa: BLE001 - still unknown; the check below stops the story
+                self.say(f"  coverage scout failed again: {type(e).__name__}: {e}")
+        if not coverage_checked(self.coverage.get("trail", [])):
             # "Nothing found" only means something if we could look. Never publish a story whose prior
             # coverage nobody could check: stop, and let the pipeline retry it when search is back.
             raise CoverageUnknown("couldn't check prior coverage: every search for it failed. "
