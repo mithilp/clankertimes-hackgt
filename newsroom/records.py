@@ -149,6 +149,14 @@ def lawsuits(company: str, problem: str) -> list[dict]:
     return records
 
 
+# What an 8-K item number means: the items are how a company says what happened.
+EIGHT_K_ITEMS = {"1.01": "material agreement", "1.02": "agreement terminated", "1.03": "bankruptcy or receivership",
+                 "1.05": "cybersecurity incident", "2.01": "acquisition or sale completed", "2.03": "new debt",
+                 "2.04": "debt accelerated", "2.05": "exit or layoff costs", "2.06": "material impairment",
+                 "3.01": "delisting notice", "4.01": "auditor changed", "4.02": "past financials can't be relied on",
+                 "5.02": "executive or director departure", "5.07": "shareholder vote", "8.01": "other event"}
+
+
 def sec_filings(phrase: str, forms: str = "", since: str = "") -> list[dict]:
     """EDGAR full-text search (filings since 2001): the filings whose text contains the phrase, newest first.
     forms: comma-separated form types (8-K, 10-K, 4, S-1, DEF 14A, 13D ...). since: YYYY-MM-DD, default a
@@ -172,7 +180,9 @@ def sec_filings(phrase: str, forms: str = "", since: str = "") -> list[dict]:
         rows.append({"url": f"https://www.sec.gov/Archives/edgar/data/{cik}/{adsh.replace('-', '')}/{filename}",
                      "title": f"{src.get('form', '')} {', '.join(src.get('display_names', []))[:120]}",
                      "date": src.get("file_date", ""), "form": src.get("form", ""),
-                     "filer": ", ".join(src.get("display_names", []))})
+                     "filer": ", ".join(src.get("display_names", [])),
+                     "items": [EIGHT_K_ITEMS.get(i, i) for i in src.get("items") or []],
+                     "place": ", ".join(src.get("biz_locations") or [])})
     return sorted(rows, key=lambda r: r["date"], reverse=True)
 
 

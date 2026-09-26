@@ -322,6 +322,26 @@ def federal_register_search(term: str, limit: int = STEP_LIMIT) -> list[dict]:
     return out
 
 
+def sec_filings(arg: str, limit: int = STEP_LIMIT) -> list[dict]:
+    """SEC EDGAR full-text search: "exact phrase | forms", e.g. "going concern | 8-K". Past 30 days, newest
+    first, one candidate per filing (a filing's exhibits are folded into it)."""
+    from datetime import date, timedelta
+    from .records import sec_filings as search_sec
+    phrase, _, forms = (p.strip() for p in arg.partition("|"))
+    out, seen = [], set()
+    for r in search_sec(phrase, forms, (date.today() - timedelta(days=30)).isoformat()):
+        accession = r["url"].rsplit("/", 2)[-2]
+        if accession in seen:
+            continue
+        seen.add(accession)
+        out.append(candidate("sec", f"{r['form']} {r['filer'][:120]}: {', '.join(r['items']) or phrase}", r["url"],
+                             f"filed {r['date']} · {r['place']} · contains \"{phrase}\"",
+                             {"kind": "published", "value": r["date"]}))
+        if len(out) >= limit:
+            break
+    return out
+
+
 def web_search(query: str, limit: int = 10) -> list[dict]:
     """A general web search (Brave, or the local browser with NEWSROOM_SEARCH_BACKEND=browser).
     Results carry no date, so they show what exists, not what is moving."""
@@ -336,6 +356,9 @@ TOOLS = {
     "subreddit": (subreddit, "subreddit name", "newest posts in a subreddit; add :hot for the hot list, e.g. gatech:hot"),
     "feed": (feed, "RSS or Atom URL", "any RSS or Atom feed, e.g. an institution's newsroom"),
     "federal_register": (federal_register_search, "search term", "Federal Register documents containing the exact phrase, newest first"),
+    "sec_filings": (sec_filings, "exact phrase | forms", "SEC filings from the past 30 days containing the phrase, e.g. "
+                    "\"going concern | 8-K\", \"subpoena | 10-Q\", \"Atlanta | 4\". Titles show what an 8-K reports "
+                    "(auditor changed, executive departure, restatement)"),
     "web_search": (web_search, "query", "general web search; undated, so good for finding what exists, weak for what is moving. Keep queries short: site:example.org plus one or two words"),
 }
 
