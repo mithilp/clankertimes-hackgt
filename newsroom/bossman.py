@@ -61,7 +61,7 @@ You are about to search for candidates on the beat described above. Choose the c
 
 {tools}
 
-Choose 8-14 calls. Cover the beat's different kinds of interesting (money, safety, governance...), not
+Choose 8-{max_calls} calls. Cover the beat's different kinds of interesting (money, safety, governance...), not
 ten phrasings of one search. Prefer sources that show what is moving now. For each call say what you
 expect it to surface, so we can later see which expectations held.
 
@@ -100,6 +100,15 @@ once. Group the signals that are about the same underlying event, decision or do
 merely share a topic or an institution are NOT the same.
 
 Reply with JSON only: {"groups": [[<n>, <n>, ...], ...]}, listing only groups of two or more.
+"""
+
+SAME_EVENT = """
+A new signal is about to be stored. Below it are the stored signals most similar to it. Is the new
+signal about the same underlying event, decision or document as one of them? A different development
+in the same story (a vote after a proposal, a lawsuit after an incident) is NOT the same event, and
+neither is a different claim about the same institution.
+
+Reply with JSON only: {"same_as": <the stored signal's number>} or {"same_as": null}
 """
 
 MAX_FOLLOW_UPS = 4
@@ -193,10 +202,31 @@ def _tool_listing() -> str:
     return "\n".join(lines)
 
 
-def plan(beat_text: str) -> dict:
+def _previous(prev: dict | None) -> str:
+    """What the last pass learned, for the next plan: so a long-running loop varies its calls and
+    stops repeating dead ends instead of making the same plan every 15 minutes."""
+    if not prev:
+        return ""
+    r, calls = prev.get("reflection") or {}, {t["step"]: t for t in prev.get("trace") or []}
+
+    def call(step):
+        t = calls.get(step, {})
+        return f"{t.get('tool', '?')}({t.get('arg', '')!r})"
+
+    lines = [f"Assessment: {r.get('assessment', '')}"]
+    lines += [f"Dead end: {call(d.get('step'))}: {d.get('why', '')}" for d in r.get("dead_ends", [])]
+    lines += [f"Productive: {call(d.get('step'))}: {d.get('why', '')}" for d in r.get("productive", [])]
+    lines += [f"Beat note: {n}" for n in r.get("beat_notes", [])]
+    lines += [f"Stored last pass: {s}" for s in prev.get("stored", [])]
+    return ("\n\nLAST PASS, {when}. Don't repeat its dead ends. Productive calls can run again, since the "
+            "news moves. Spend the rest on parts of the beat it didn't reach.\n").format(when=prev.get("when", "")) + "\n".join(lines)
+
+
+def plan(beat_text: str, *, max_calls: int = 14, previous: dict | None = None) -> dict:
     """Which searches and feeds to run for this beat."""
-    reply = llm.ask_json(_system(beat_text) + "\n" + PLAN.format(tools=_tool_listing()),
-                         "Plan this pass.", model=config.load().smart_model, max_tokens=3000)
+    reply = llm.ask_json(_system(beat_text) + "\n" + PLAN.format(tools=_tool_listing(), max_calls=max(max_calls, 8)),
+                         "Plan this pass." + _previous(previous), model=config.load().smart_model,
+                         max_tokens=1500 + 150 * max_calls)
     steps = [{"tool": str(s.get("tool", "")).strip(), "arg": str(s.get("arg", "") or "").strip(),
               "why": str(s.get("why", "")).strip()}
              for s in reply.get("steps", []) if isinstance(s, dict)]
@@ -249,7 +279,7 @@ def _outcomes(trace: list[dict], candidates: list[dict], decisions: dict) -> Non
         t["skip_reasons"] = [reasons[c["id"]] for c in mine if c["id"] in reasons][:8]
 
 
-def reflect(beat_text: str, trace: list[dict], signals: list[dict]) -> dict:
+def reflect(beat_text: str, trace: list[dict], signals: list[dict], max_follow: int = MAX_FOLLOW_UPS) -> dict:
     """Look back at the pass: dead ends, productive calls, follow-ups, and edits to the beat."""
     listing = "\n\n".join(
         f"step {t['step']}: {t['tool']}({t['arg']!r}) - expected: {t['why']}\n"
@@ -258,12 +288,12 @@ def reflect(beat_text: str, trace: list[dict], signals: list[dict]) -> dict:
         + "".join(f"\n  skipped: {r}" for r in t["skip_reasons"][:5])
         for t in trace)
     kept = "\n".join(f"- {s.get('summary', '')}" for s in signals) or "(none)"
-    reply = llm.ask_json(_system(beat_text) + "\n" + REFLECT.format(max_follow=MAX_FOLLOW_UPS),
+    reply = llm.ask_json(_system(beat_text) + "\n" + REFLECT.format(max_follow=max_follow),
                          f"CALLS:\n\n{listing}\n\nSIGNALS THIS PASS ({len(signals)}):\n{kept}\n\nTools:\n{_tool_listing()}",
                          model=config.load().smart_model, max_tokens=3000)
     follow = [{"tool": str(f.get("tool", "")).strip(), "arg": str(f.get("arg", "") or "").strip(),
                "why": str(f.get("why", "")).strip(), "lead": str(f.get("lead", "")).strip()}
-              for f in reply.get("follow_ups", []) if isinstance(f, dict)][:MAX_FOLLOW_UPS]
+              for f in reply.get("follow_ups", []) if isinstance(f, dict)][:max_follow]
     return {"assessment": str(reply.get("assessment", "")),
             "dead_ends": [d for d in reply.get("dead_ends", []) if isinstance(d, dict)],
             "productive": [d for d in reply.get("productive", []) if isinstance(d, dict)],
@@ -304,6 +334,24 @@ def to_signals(decisions: dict, candidates: list[dict], beat: str = "") -> list[
     return out
 
 
+def same_event(store: SignalStore, signal: Signal) -> Signal | None:
+    """An already-stored signal about the same event, if any. Word overlap misses rewrites of one story
+    (two passes wrote the Fanning chancellor pick in different words), so the closest stored signals
+    go to a quick model check."""
+    try:
+        hits = [h for h, _ in store.similar(signal.text(), k=3) if h.id]
+    except Exception:  # noqa: BLE001 - a search failure just means no merge
+        return None
+    if not hits:
+        return None
+    listing = "\n".join(f"{n}. {h.summary} (accountable: {h.accountable_party}; first seen {h.first_seen[:10]})"
+                        for n, h in enumerate(hits))
+    reply = llm.ask_json(SAME_EVENT, f"NEW SIGNAL:\n{signal.summary} (accountable: {signal.accountable_party})"
+                                     f"\n\nSTORED:\n{listing}", model=None, max_tokens=200)
+    n = reply.get("same_as")
+    return hits[n] if isinstance(n, int) and not isinstance(n, bool) and 0 <= n < len(hits) else None
+
+
 def _origin(raw, cands: list[dict]) -> str:
     """The store dedups on the origin URL, so it must be a bare URL. Models often write a name
     ("The Atlanta Journal-Constitution") or a URL with a note after it; then use the earliest-seen
@@ -332,7 +380,7 @@ def hard_checks(signal: Signal) -> list[str]:
 
 
 def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Path | None = None,
-             beat: str | None = None, say=print) -> dict:
+             beat: str | None = None, max_calls: int = 14, previous: dict | None = None, say=print) -> dict:
     """One pass: gather (or load a saved gather), judge, check, store. Saves everything it saw.
     With a beat: plan, run the plan, judge, reflect, run the follow-ups, judge those."""
     out = run_dir()
@@ -342,7 +390,7 @@ def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Pa
         candidates, errors = json.loads(Path(replay).read_text(encoding="utf-8")), {}
         say(f"replaying {len(candidates)} saved candidates from {replay}")
     elif beat_text:
-        plan_ = plan(beat_text)
+        plan_ = plan(beat_text, max_calls=max_calls, previous=previous)
         (out / "plan.json").write_text(json.dumps(plan_, indent=1, ensure_ascii=False), encoding="utf-8")
         say(f"beat {beat_name}: planned {len(plan_['steps'])} calls")
         steps = plan_["steps"] + [{"tool": s, "arg": "", "why": "requested with --sources"} for s in sources or []]
@@ -359,7 +407,7 @@ def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Pa
 
     if plan_ is not None:
         _outcomes(trace, candidates, decisions)
-        reflection = reflect(beat_text, trace, decisions["signals"])
+        reflection = reflect(beat_text, trace, decisions["signals"], max_follow=max(MAX_FOLLOW_UPS, max_calls // 4))
         say(f"reflected: {len(reflection['dead_ends'])} dead ends, {len(reflection['follow_ups'])} follow-ups")
         if reflection["follow_ups"]:
             more, trace2 = run_steps(reflection["follow_ups"], round_no=2, first=len(trace) + 1, known=known)
@@ -384,9 +432,13 @@ def run_once(store: SignalStore, *, sources: list[str] | None = None, replay: Pa
         if problems := hard_checks(signal):
             report["failed_checks"].append({"summary": signal.summary, "problems": problems})
             continue
+        if match := same_event(store, signal):
+            # Same event already stored: take its origin, so the store merges this into it.
+            signal.origin = match.origin
         sid, created = store.add(signal)
         (report["created"] if created else report["merged"]).append({"id": sid, "summary": signal.summary})
     (out / "report.json").write_text(json.dumps(report, indent=1, ensure_ascii=False), encoding="utf-8")
     if reflection:
         report["reflection"] = reflection
+        report["trace"] = trace
     return report

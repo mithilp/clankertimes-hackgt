@@ -201,3 +201,34 @@ def test_bossman_origin_is_always_a_bare_url():
                              ("https://www.usg.edu/news/1", "https://www.usg.edu/news/1")]:
         signal = bossman.to_signals({"signals": [{**base, "origin": origin}]}, cands)[0]
         assert signal.origin == expected
+
+
+def test_bossman_merges_a_rewrite_of_a_stored_event(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    store = InMemorySignals()
+    old_id, _ = store.add(Signal(summary="Regents name Fanning sole finalist for chancellor", why_interesting="w",
+                                 checkable_claim="c", origin="https://news.example/a", accountable_party="USG Board of Regents",
+                                 spike={"value": "1"}, sources=[{"url": "https://news.example/a"}]))
+    decisions = {"signals": [{"candidate_ids": ["news:2"], "summary": "Former Southern Company CEO picked to lead USG",
+                              "why_interesting": "governance", "accountable_party": "University System of Georgia",
+                              "checkable_claim": "the vote", "records_trail": [], "origin": ""}], "skipped": []}
+
+    def fake(system, user, **kw):
+        if "about to be stored" in system:
+            assert "Regents name Fanning" in user
+            return {"same_as": 0}
+        return decisions
+    monkeypatch.setattr(llm, "ask_json", fake)
+    monkeypatch.setattr(bossman, "gather", lambda sources=None: (CANDIDATES[1:2], {}))
+    report = bossman.run_once(store, say=lambda *_: None)
+    assert report["merged"] and not report["created"]
+    assert len(store.get(old_id).sources) == 2
+
+
+def test_bossman_next_plan_sees_the_last_pass():
+    prev = {"reflection": {"assessment": "thin", "dead_ends": [{"step": 2, "why": "all sports"}],
+                           "productive": [], "beat_notes": ["drop hot"]},
+            "trace": [{"step": 2, "tool": "news_search", "arg": "Atlanta"}], "when": "14:00 EDT", "stored": ["x"]}
+    text = bossman._previous(prev)
+    assert "Dead end: news_search('Atlanta'): all sports" in text and "Stored last pass: x" in text
+    assert bossman._previous(None) == ""

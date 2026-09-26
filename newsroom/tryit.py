@@ -41,6 +41,8 @@ def add_parser(sub) -> None:
     b.add_argument("--replay", type=Path, help="rerun the judge on a saved runs/bossman/<ts>/candidates.json")
     b.add_argument("--gather-only", action="store_true", help="fetch and save candidates; no model calls")
     b.add_argument("--loop", type=float, metavar="MINUTES", help="keep running a pass every N minutes")
+    b.add_argument("--passes", type=int, help="with --loop: stop after this many passes")
+    b.add_argument("--calls", type=int, default=14, help="with --beat: most calls to plan per pass (default 14)")
 
     m = agents.add_parser("mclovin", help="read signals and write falsifiable hypotheses")
     m.add_argument("--hours", type=float, default=24, help="read signals last seen in the past N hours")
@@ -95,20 +97,36 @@ def _bossman(args) -> None:
         print(f"saved {path}  (judge them later with --replay {path})")
         return
     store = get_store()
+    previous, n = None, 0
     while True:
-        report = bossman.run_once(store, sources=sources, replay=args.replay, beat=args.beat)
-        _print_beat_pass(report)
-        print(f"\n{report['candidates']} candidates -> {len(report['created'])} new signals, "
-              f"{len(report['merged'])} merged into existing, {report['skipped']} skipped, "
-              f"{len(report['failed_checks'])} failed checks")
-        for s in report["created"]:
-            print(f"  + {s['summary']}")
-        for s in report["merged"]:
-            print(f"  = {s['summary']}")
-        for f in report["failed_checks"]:
-            print(f"  ✗ {f['summary'] or '(no summary)'}: {'; '.join(f['problems'])}")
-        print(f"saved {report['run_dir']}/")
-        if not args.loop or args.replay:
+        n += 1
+        if args.loop:
+            print(f"\n=== pass {n} · {datetime.now().astimezone():%a %H:%M %Z} ===")
+        try:
+            report = bossman.run_once(store, sources=sources, replay=args.replay, beat=args.beat,
+                                      max_calls=args.calls, previous=previous)
+        except Exception as e:  # noqa: BLE001 - in a long run, one bad pass shouldn't end the loop
+            if not args.loop:
+                raise
+            print(f"pass {n} failed: {type(e).__name__}: {e}")
+            report = None
+        if report is not None:
+            _print_beat_pass(report)
+            if report.get("reflection"):
+                previous = {"reflection": report["reflection"], "trace": report.get("trace"),
+                            "when": f"{datetime.now().astimezone():%H:%M %Z}",
+                            "stored": [s["summary"] for s in report["created"] + report["merged"]]}
+            print(f"\n{report['candidates']} candidates -> {len(report['created'])} new signals, "
+                  f"{len(report['merged'])} merged into existing, {report['skipped']} skipped, "
+                  f"{len(report['failed_checks'])} failed checks")
+            for s in report["created"]:
+                print(f"  + {s['summary']}")
+            for s in report["merged"]:
+                print(f"  = {s['summary']}")
+            for f in report["failed_checks"]:
+                print(f"  ✗ {f['summary'] or '(no summary)'}: {'; '.join(f['problems'])}")
+            print(f"saved {report['run_dir']}/")
+        if not args.loop or args.replay or (args.passes and n >= args.passes):
             return
         print(f"next pass in {args.loop:g} minutes (ctrl-c to stop)")
         time.sleep(args.loop * 60)
