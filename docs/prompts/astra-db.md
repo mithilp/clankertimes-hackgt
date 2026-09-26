@@ -1,6 +1,6 @@
 # Prompt: wire Astra DB in as the signals store
 
-Paste everything below the line into your coding agent, from the repo root on the `claude-backend` branch.
+Paste everything below the line into your coding agent, from the repo root on `main`.
 
 ---
 
