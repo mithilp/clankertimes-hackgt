@@ -10,7 +10,7 @@ Two implementations share this contract:
   * InMemorySignals, below: the reference implementation, used by the tests and for offline runs
     (NEWSROOM_SIGNALS=memory). Similarity is word overlap, not embeddings.
   * AstraSignals, in newsroom/signals_astra.py: DataStax Astra DB with real vector search.
-    Not written yet; see docs/prompts/astra-db.md. It must pass tests/test_signals.py.
+    It must pass tests/test_signals.py (run them against it with NEWSROOM_TEST_ASTRA=1).
 
 A signal is one Bossman item. The fields mirror agents/bossman/playbook.md.
 """
@@ -23,7 +23,7 @@ import uuid
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from typing import Protocol
-from urllib.parse import urlparse
+from urllib.parse import parse_qsl, urlencode, urlparse
 
 # Two signals whose text overlaps this much, about the same accountable party, are one signal.
 MERGE_SIMILARITY = float(os.getenv("NEWSROOM_SIGNAL_MERGE", "0.8"))
@@ -60,13 +60,37 @@ class Signal:
         return asdict(self)
 
 
+# Query parameters that only say how someone arrived at a page (plus any utm*). Every other parameter is
+# kept, because on many sites it is what identifies the page: youtube.com/watch?v=, nhtsa.gov/recalls?nhtsaId=.
+TRACKING_PARAMS = {"fbclid", "gclid", "dclid", "msclkid", "igshid", "mc_cid", "mc_eid", "ref", "ref_src",
+                   "ref_url", "si", "s", "t", "feature", "share_id", "smid", "cmpid"}
+# Other hostnames for the same site.
+HOST_ALIASES = {"twitter.com": "x.com", "mobile.twitter.com": "x.com", "mobile.x.com": "x.com",
+                "old.reddit.com": "reddit.com", "new.reddit.com": "reddit.com", "np.reddit.com": "reddit.com",
+                "m.reddit.com": "reddit.com", "m.youtube.com": "youtube.com", "m.facebook.com": "facebook.com"}
+
+
 def origin_key(origin: str) -> str:
-    """Normalise an origin so reposts of the same thing collide: host + path, lowercased, no query."""
-    o = origin.strip().lower()
-    if o.startswith(("http://", "https://")):
-        u = urlparse(o)
-        return f"{(u.hostname or '').removeprefix('www.')}{u.path.rstrip('/')}"
-    return re.sub(r"\s+", " ", o)
+    """Normalise an origin so reposts of the same thing collide and different things don't: host without
+    www or mobile aliases, lowercased path, and only the query parameters that identify the page."""
+    o = origin.strip()
+    if not o.lower().startswith(("http://", "https://")):
+        return re.sub(r"\s+", " ", o.lower())
+    u = urlparse(o)
+    host = (u.hostname or "").removeprefix("www.")
+    host = HOST_ALIASES.get(host, host)
+    path = u.path.rstrip("/")
+    query = sorted((k, v) for k, v in parse_qsl(u.query) if not k.lower().startswith("utm")
+                   and k.lower() not in TRACKING_PARAMS)
+    if host == "youtu.be" or (host == "youtube.com" and path.startswith("/shorts/")):
+        # Video ids are case-sensitive, so they go in the query, which isn't lowercased.
+        host, path, query = "youtube.com", "/watch", [("v", path.rsplit("/", 1)[-1])]
+    elif host == "youtube.com" and path == "/watch":
+        query = [(k, v) for k, v in query if k == "v"]   # drop playlist position and the like
+    elif host == "x.com" and (m := re.fullmatch(r"/[^/]+/status/(\d+)", path)):
+        path = f"/i/status/{m[1]}"                        # the post, not the account that posted it
+    key = f"{host}{path.lower()}"
+    return f"{key}?{urlencode(query)}" if query else key
 
 
 class SignalStore(Protocol):
@@ -163,9 +187,9 @@ def get_store() -> SignalStore:
         if os.getenv("NEWSROOM_SIGNALS", "astra").lower() == "memory":
             _store = InMemorySignals()
         else:
-            if not os.getenv("ASTRA_DB_API_ENDPOINT"):
-                raise RuntimeError("ASTRA_DB_API_ENDPOINT is not set. Configure Astra DB in .env, "
+            if not (os.getenv("ASTRA_DB_ID") or os.getenv("ASTRA_DB_API_ENDPOINT")):
+                raise RuntimeError("ASTRA_DB_ID is not set. Configure Astra DB in .env, "
                                    "or set NEWSROOM_SIGNALS=memory for an offline run.")
-            from .signals_astra import AstraSignals   # written against docs/prompts/astra-db.md
+            from .signals_astra import AstraSignals
             _store = AstraSignals()
     return _store

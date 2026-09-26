@@ -1,16 +1,36 @@
 """The signals-store contract. Any implementation (in-memory, Astra DB) must pass these.
 
-To run them against Astra instead, point `make_store` at AstraSignals with a throwaway collection.
+With NEWSROOM_TEST_ASTRA=1 (and Astra configured in .env) they also run against AstraSignals, in a
+throwaway collection. Not on the endpoint alone: newsroom/config.py loads .env, so anyone with Astra
+configured would otherwise reach the network on every plain `pytest`.
 """
+
+import os
+import uuid
 
 import pytest
 
 from newsroom.signals import InMemorySignals, Signal, origin_key
 
+ASTRA = os.getenv("NEWSROOM_TEST_ASTRA") == "1"
 
-@pytest.fixture
-def store():
-    return InMemorySignals()
+
+@pytest.fixture(scope="session")
+def astra_store():
+    from newsroom.signals_astra import AstraSignals
+    store = AstraSignals(f"signals_test_{uuid.uuid4().hex[:8]}")
+    yield store
+    store.database.drop_collection(store.name)
+
+
+@pytest.fixture(params=["memory", pytest.param("astra", marks=pytest.mark.skipif(
+    not ASTRA, reason="set NEWSROOM_TEST_ASTRA=1 to run against Astra DB"))])
+def store(request):
+    if request.param == "memory":
+        return InMemorySignals()
+    astra = request.getfixturevalue("astra_store")
+    astra.collection.delete_many({})    # every test starts from an empty store
+    return astra
 
 
 def signal(**kw) -> Signal:
@@ -82,5 +102,21 @@ def test_mark_used_records_the_hypothesis(store):
     assert s.status == "used" and s.used_by == ["hyp-1"]
 
 
-def test_origin_key_ignores_query_scheme_and_www():
+def test_origin_key_ignores_tracking_scheme_and_www():
     assert origin_key("https://www.Reddit.com/r/x/abc/?utm=1") == origin_key("http://reddit.com/r/x/abc")
+
+
+def test_origin_key_keeps_query_that_identifies_the_page():
+    assert origin_key("https://www.youtube.com/watch?v=AAAA1111") != origin_key("https://www.youtube.com/watch?v=BBBB2222")
+    assert origin_key("https://www.nhtsa.gov/recalls?nhtsaId=25V000") != origin_key("https://www.nhtsa.gov/recalls?nhtsaId=24V999")
+    assert origin_key("https://news.ycombinator.com/item?id=1") != origin_key("https://news.ycombinator.com/item?id=2")
+
+
+def test_origin_key_merges_other_addresses_for_the_same_post():
+    video = origin_key("https://www.youtube.com/watch?v=AbC123")
+    assert origin_key("https://youtu.be/AbC123?si=xyz") == video
+    assert origin_key("https://m.youtube.com/watch?v=AbC123&feature=share&list=PL1") == video
+    assert origin_key("https://www.youtube.com/watch?v=abc123") != video      # ids are case-sensitive
+    tweet = origin_key("https://x.com/someone/status/42")
+    assert tweet == origin_key("https://twitter.com/i/status/42?s=20") == "x.com/i/status/42"
+    assert origin_key("https://old.reddit.com/r/x/comments/abc/t/") == origin_key("https://www.reddit.com/r/x/comments/abc/t")
