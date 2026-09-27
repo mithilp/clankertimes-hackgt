@@ -263,9 +263,12 @@ ratio at the December 2024 deadline its consent order set at 9 percent".
 
 Also write a "kicker" (two to four words naming the subject, e.g. "Vehicle safety") and a "dek": one or two
 sentences under the headline with the specific finding and its numbers, as strong as the evidence and no
-stronger.
+stronger. Then three short lines for the box at the top of the story:
+  "found": what this reporting established that no outlet had published, in one or two plain sentences.
+  "prior": who reported what before (by outlet), in one sentence; "" if nobody had.
+  "why_it_matters": one plain sentence on who is affected and how (customers, taxpayers, investors, students).
 
-Reply with JSON only: {"kicker": "...", "headline": "...", "dek": "...",
+Reply with JSON only: {"kicker": "...", "headline": "...", "dek": "...", "found": "...", "prior": "...", "why_it_matters": "...",
  "paragraphs": [[{"text": "One sentence.", "cite": ["F1"]}]]}
 """
 
@@ -307,7 +310,8 @@ the story to avoid it. Otherwise leave that list empty and cut or soften the cla
 The writing rules below still apply.
 
 Reply with JSON only:
-{"kicker": "...", "headline": "...", "dek": "...", "paragraphs": [[{"text": "...", "cite": ["F1"]}]],
+{"kicker": "...", "headline": "...", "dek": "...", "found": "...", "prior": "...", "why_it_matters": "...",
+ "paragraphs": [[{"text": "...", "cite": ["F1"]}]],
  "changes": ["what you changed and why"],
  "needs_research": [{"statement": "...", "records": ["..."]}]}
 """
@@ -1339,6 +1343,8 @@ def _draft(reply: dict, previous: dict | None = None) -> dict:
     return {"kicker": str(reply.get("kicker") or previous.get("kicker") or "").strip(),
             "headline": str(reply.get("headline") or "").strip(),
             "dek": str(reply.get("dek") or previous.get("dek") or "").strip(),
+            **{k: str(reply.get(k) if reply.get(k) is not None else previous.get(k) or "").strip()
+               for k in ("found", "prior", "why_it_matters")},
             "paragraphs": reply.get("paragraphs") or []}
 
 

@@ -32,6 +32,9 @@ export type Article = {
   kicker?: string;
   headline: string;
   dek?: string;
+  found?: string;          // what this reporting established that no outlet had published
+  prior?: string;          // who reported what before
+  why_it_matters?: string;
   published_at: string;
   paragraphs: Sentence[][];
   sources: Record<string, Source>;
@@ -60,7 +63,7 @@ export const BEAT_NAMES: Record<string, string> = {
 };
 
 const FIELDS = [
-  "slug", "sample", "status", "beats", "kicker", "headline", "dek", "published_at",
+  "slug", "sample", "status", "beats", "kicker", "headline", "dek", "found", "prior", "why_it_matters", "published_at",
   "paragraphs", "sources", "timeline", "corrections",
 ] as const;
 

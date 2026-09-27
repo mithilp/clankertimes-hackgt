@@ -220,3 +220,12 @@ p { margin: 0; }
 .footer a { text-decoration: underline; text-underline-offset: 3px; }
 
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; } }
+
+/* What this reporting found that nobody had published, and why a reader should care. */
+.found { max-width: var(--read); margin: 26px auto 6px; padding: 16px 20px; background: var(--paper-2);
+         border-top: 2px solid var(--ink); display: flex; flex-direction: column; gap: 10px; }
+.found p { margin: 0; font-family: var(--serif); font-size: 17px; line-height: 1.5; color: var(--ink); }
+.found .label { display: block; margin-bottom: 3px; }
+.found .prior { font-size: 15.5px; color: var(--ink-2); }
+.story .why { margin: 6px 0 0; font-family: var(--serif); font-size: 15.5px; line-height: 1.45; color: var(--ink); }
+.story .why .label { margin-right: 4px; }

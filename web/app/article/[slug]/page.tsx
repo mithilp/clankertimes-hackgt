@@ -79,6 +79,14 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
           <Share url={url} title={article.headline} />
         </header>
 
+        {(article.found || article.why_it_matters) && (
+          <aside className="found" aria-label="What we found">
+            {article.found && <p><span className="label">What we found</span>{smart(article.found)}</p>}
+            {article.prior && <p className="prior"><span className="label">Reported before</span>{smart(article.prior)}</p>}
+            {article.why_it_matters && <p><span className="label">Why it matters</span>{smart(article.why_it_matters)}</p>}
+          </aside>
+        )}
+
         <div className="body">
           {article.paragraphs.map((paragraph, p) => (
             <p key={p}>

@@ -44,6 +44,7 @@ def to_document(slug: str, article: dict, sources: dict[str, dict], *, beats: li
     return {
         "slug": slug, "status": "published", "sample": False, "beats": beats or [],
         "kicker": article.get("kicker", ""), "headline": article["headline"].strip(), "dek": article.get("dek", ""),
+        "found": article.get("found", ""), "prior": article.get("prior", ""), "why_it_matters": article.get("why_it_matters", ""),
         "published_at": published_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "paragraphs": [[{"text": s["text"].strip(), "cite": list(s["cite"])} for s in p] for p in article["paragraphs"]],
         "sources": {sid: {"kind": KIND.get(s.get("source_type", ""), s.get("source_type", "source")),

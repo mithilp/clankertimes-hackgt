@@ -26,6 +26,7 @@ export default async function FrontPage() {
           <span className="kicker label">{lead.kicker || BEAT_NAMES[lead.beats[0]]}</span>
           <h2><Link href={`/article/${lead.slug}`}>{smart(lead.headline)}</Link></h2>
           {lead.dek && <p className="dek">{smart(lead.dek)}</p>}
+          {lead.why_it_matters && <p className="why"><span className="label">Why it matters</span> {smart(lead.why_it_matters)}</p>}
           {opening && <p className="opening">{opening}</p>}
           <span className="meta">{readingMinutes(lead)} min read · {Object.keys(lead.sources).length} sources</span>
           {lead.sample && <Sample />}
@@ -36,6 +37,7 @@ export default async function FrontPage() {
               <span className="kicker label">{a.kicker || BEAT_NAMES[a.beats[0]]}</span>
               <h2><Link href={`/article/${a.slug}`}>{smart(a.headline)}</Link></h2>
               {a.dek && <p className="dek">{smart(a.dek)}</p>}
+              {a.why_it_matters && <p className="why"><span className="label">Why it matters</span> {smart(a.why_it_matters)}</p>}
               <span className="meta">{readingMinutes(a)} min read{a.sample ? " · Sample" : ""}</span>
             </article>
           ))}
