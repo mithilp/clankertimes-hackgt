@@ -250,8 +250,19 @@ Rules:
 - Put direct quotes in double quotation marks, copied exactly from a source's text.
 - Name no private individuals.
 
-Also write a "kicker" (two to four words naming the subject, e.g. "Vehicle safety") and a "dek": one
-sentence under the headline saying what the reporting found, as strong as the evidence and no stronger.
+Write numbers the way a newspaper does in your own sentences: "5.17%", "$3.2 million", "two years". Quoted
+text stays exactly as the source wrote it.
+
+The headline is what makes someone read the story: say what happened and why it matters to a reader, in
+plain words (who failed, who paid, what went wrong, what regulators did or didn't do), in one grammatical
+sentence of no more than about 16 words. Don't lead the headline with a technical figure (a ratio, a
+docket number, a statute); the specific numbers go in the dek. Good: "A Philadelphia bank failed more than
+two years after regulators ordered it to fix its capital". Bad: "Bank reported a 5.17 percent leverage
+ratio at the December 2024 deadline its consent order set at 9 percent".
+
+Also write a "kicker" (two to four words naming the subject, e.g. "Vehicle safety") and a "dek": one or two
+sentences under the headline with the specific finding and its numbers, as strong as the evidence and no
+stronger.
 
 Reply with JSON only: {"kicker": "...", "headline": "...", "dek": "...",
  "paragraphs": [[{"text": "One sentence.", "cite": ["F1"]}]]}
@@ -456,6 +467,30 @@ reporting on this story if it exists: the institution plus the event, the way a 
 
 Reply with JSON only: {"queries": ["...", "...", "..."]}
 """
+
+
+NARRATE = """You write the "How this story came together" timeline under a news article, for a general reader.
+Each numbered step below is one moment in the reporting, with who did it. Rewrite each step's text as one or two
+short, plain sentences a curious non-expert follows. Keep every fact, add none. Drop docket numbers, statute
+sections, report codes, file names and internal labels unless the reader needs them. Refer to agents plainly
+("a research agent", "another research agent"); never "scout 3" or "H2". Make the steps read as a sequence:
+"A research agent confirmed...", "Another research agent then found...". A hunch step starts "An agent had a
+hunch that".
+
+Reply with JSON only: {"steps": [{"i": 0, "text": "..."}]}
+"""
+
+
+def whole_sentences(text: str, limit: int) -> str:
+    """Text cut to at most `limit` characters without cutting a sentence (or, failing that, a word) in half."""
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    cut = text[:limit]
+    end = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    if end > 0:
+        return cut[:end + 1]
+    return cut[:cut.rfind(" ")].rstrip(",;:") + "…"
 
 
 class CoverageUnknown(RuntimeError):
@@ -1173,55 +1208,59 @@ class Investigation:
         return {"beats": beats, "timeline": self.timeline(decision, reviewed)}
 
     def timeline(self, decision: dict, reviewed: dict) -> list[dict]:
-        """How the story came together, for the site: the path that led to it, oldest first. Dead ends,
-        contradicted and dropped claims, and material that was cut are left out on purpose."""
+        """How the story came together, for the site, oldest first, in plain words a reader follows: what the
+        news desk noticed, the hunch, what each research agent confirmed, the reporter's call, the council's
+        sign-off. Dead ends, unsettled checks, contradicted claims and the editors' back-and-forth stay out."""
         steps: list[dict] = []
 
         def add(at, who: str, text: str, result: str = "") -> None:
             if at:
-                steps.append({"at": _iso(at), "who": who, "text": text.strip()[:400], "result": result})
+                steps.append({"at": _iso(at), "who": who, "text": text.strip(), "result": result})
 
         seen = [s for s in self.signals if getattr(s, "first_seen", "")]
         if seen:
             first = min(seen, key=lambda s: _iso(s.first_seen))
             desk = next((DESKS[b] for b in getattr(first, "beats", []) or [] if b in DESKS), "The news desk")
             add(first.first_seen, desk, f"Noticed: {first.summary}")
-        add(self.h.get("mclovin", {}).get("created") or getattr(self, "started_at", ""), "Hypothesis desk",
-            f"Proposed the claim to test: {self.h['hypothesis']}")
+        add(self.h.get("mclovin", {}).get("created") or getattr(self, "started_at", ""), "Hunch",
+            f"An agent had a hunch that {self.h['hypothesis'][0].lower()}{self.h['hypothesis'][1:]}")
         cov = self.coverage.get("report", {}) if isinstance(self.coverage, dict) else {}
         if cov.get("coverage"):
             n = len(cov["coverage"])
-            gap = self.plan.get("gap", "")
-            add(getattr(self, "coverage_at", ""), "Coverage scout",
-                f"Found {n} earlier report{'s' if n != 1 else ''} on this." + (f" What they left open: {gap}" if gap else ""))
-        # Confirmed claims, and unsettled ones the scouts found something on. A claim with nothing found is a
-        # dead end, and a contradicted one didn't make the story: both stay out.
-        kept = [s for s in self.subs if not s["dropped"] and (status(s["findings"]) in ("supported", "disputed")
-                                                                 or (status(s["findings"]) == "open" and s["findings"]))]
-        if kept:
-            add(getattr(self, "coverage_at", "") or getattr(self, "started_at", ""), "Reporter",
-                f"Split the claim into {len(kept)} part{'s' if len(kept) != 1 else ''} and sent a scout after each.")
-        for n, sub in enumerate(kept, 1):
+            add(getattr(self, "coverage_at", ""), "Research agent",
+                f"Checked what other outlets had already reported and found {n} earlier stor{'ies' if n != 1 else 'y'}; "
+                f"what they left open: {self.plan.get('gap', '')}")
+        for sub in [s for s in self.subs if not s["dropped"] and status(s["findings"]) in ("supported", "disputed")]:
             summary = (sub["reports"][-1] if sub["reports"] else {}).get("summary") or sub["statement"]
-            if status(sub["findings"]) == "supported":
-                add(sub.get("settled_at") or sub.get("reported_at"), f"Scout {n}", summary, "confirmed")
-            else:
-                add(sub.get("reported_at"), f"Scout {n}", summary, "unclear")
+            add(sub.get("settled_at") or sub.get("reported_at"), "Research agent", summary, "confirmed")
         if decision.get("pivot"):
             add(decision.get("at"), "Reporter", f"Changed course: the records pointed to a different story than the one "
                                                 f"proposed. {decision['pivot']['hypothesis']}")
         else:
             add(decision.get("at"), "Reporter", decision.get("why", ""))
         rounds = reviewed.get("history") or []
-        for c in rounds[:-1] if reviewed.get("outcome") == "approved" else rounds:
-            for j in c["review"]["judges"]:
-                if j["verdict"] != "approve" and (j.get("notes") or j.get("problems")):
-                    note = j.get("notes") or "; ".join(str(p.get("issue", "")) for p in j["problems"][:2])
-                    add(c.get("at"), JUDGES.get(j["judge"], j["judge"].title()), note, "revise")
         if reviewed.get("outcome") == "approved" and rounds:
-            add(rounds[-1].get("at"), "Council", "Approved: the skeptic, novelty and virality judges all signed off.", "approved")
+            add(rounds[-1].get("at"), "Council", "The council of models and agents signed off on the article.", "approved")
             add(now(), "Published", "", "published")
-        return sorted(steps, key=lambda x: x["at"])
+        steps = sorted(steps, key=lambda x: x["at"])
+        return self.narrate(steps)
+
+    def narrate(self, steps: list[dict]) -> list[dict]:
+        """Rewrite each step for a general reader. The facts stay; jargon, docket numbers and agent numbering go."""
+        todo = [(i, s) for i, s in enumerate(steps) if s["text"] and s["who"] not in ("Council", "Published")]
+        if todo:
+            listing = "\n".join(f"{i}. [{s['who']}] {s['text']}" for i, s in todo)
+            try:
+                reply = llm.ask_json(NARRATE, listing, model=config.load().fast_model, max_tokens=3000)
+                for item in reply.get("steps", []) if isinstance(reply.get("steps"), list) else []:
+                    i, text = item.get("i"), str(item.get("text") or "").strip()
+                    if isinstance(i, int) and 0 <= i < len(steps) and text:
+                        steps[i]["text"] = text
+            except Exception as e:  # noqa: BLE001 - the plain version is still correct, just wordier
+                self.say(f"  timeline narration failed ({type(e).__name__}); keeping the plain steps")
+        for s in steps:
+            s["text"] = whole_sentences(s["text"], 360)
+        return steps
 
     # recording
     def to_dict(self) -> dict:

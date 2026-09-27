@@ -507,8 +507,10 @@ def test_scout_reports_reach_the_reporter_and_published_articles_carry_the_trail
     from newsroom import articles_store
     steps = site["timeline"]
     who = [x["who"] for x in steps]
-    assert who[0] == "Hypothesis desk" and steps[0]["text"].startswith("Proposed the claim to test")
-    assert [x["result"] for x in steps if x["who"].startswith("Scout")] == ["confirmed"] * 3
+    assert who[0] == "Hunch" and steps[0]["text"].startswith("An agent had a hunch that")
+    assert [x["result"] for x in steps if x["who"] == "Research agent"] == ["confirmed"] * 3
+    assert not any(x["result"] in ("unclear", "revise") for x in steps)   # dead ends and editing stay out
+    assert all(len(x["text"]) <= 361 for x in steps)
     assert who[-2:] == ["Council", "Published"] and steps[-1]["result"] == "published"
     assert [x["at"] for x in steps] == sorted(x["at"] for x in steps)
     assert not any(x["result"] in ("contradicts", "dead_end") for x in steps)
@@ -669,3 +671,10 @@ def test_the_reporters_plan_sends_scouts_before_the_rewrite(env, monkeypatch):
     result = run()
     assert result["final"]["status"] == "published"
     assert any(s["statement"] == "NHTSA opened the analysis in 2024." for s in sent)
+
+
+def test_timeline_text_is_cut_at_a_sentence_not_mid_word():
+    long = "The first sentence is short. " + "Second sentence runs on and on " * 20 + "until the end."
+    cut = reporter_agent.whole_sentences(long, 100)
+    assert cut == "The first sentence is short." 
+    assert reporter_agent.whole_sentences("one two three four five six", 12).endswith("…")

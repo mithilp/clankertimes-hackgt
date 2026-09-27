@@ -25,7 +25,7 @@ export default function Timeline({ steps }: { steps: Step[] }) {
       <h2 id="timeline">How this story came together</h2>
       {hours > 0 && (
         <p className="fine">
-          From the first signal to {last?.result === "corrected" ? "the latest correction" : "publication"}: {hours < 48 ? `${hours} hours` : `${Math.round(hours / 24)} days`}, {sorted.filter((s) => s.who.startsWith("Scout")).length} records checked by scout agents, reviewed by the council before publication.
+          From the first signal to {last?.result === "corrected" ? "the latest correction" : "publication"}: {hours < 48 ? `${hours} hours` : `${Math.round(hours / 24)} days`}, {sorted.filter((s) => s.who === "Research agent" || s.who.startsWith("Scout")).length} findings confirmed by research agents, and signed off by the council before publication.
         </p>
       )}
       <ol className="tl">
