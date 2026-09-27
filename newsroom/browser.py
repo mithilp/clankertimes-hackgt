@@ -111,6 +111,42 @@ class _Browser:
         finally:
             context.close()
 
+    def search_site(self, url: str, query: str) -> tuple[str, str]:
+        """Use a site's own search box: open the page, type the query, submit. (final URL, HTML)."""
+        return self._thread.submit(self._search_site, url, query).result()
+
+    def _search_site(self, url: str, query: str) -> tuple[str, str]:
+        browser = self._ensure()
+        context = browser.new_context(user_agent=_UA, locale="en-US")
+        try:
+            page = context.new_page()
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=45_000)
+            except Exception as e:  # noqa: BLE001
+                raise BrowserError(f"could not open {url}: {str(e)[:120]}") from e
+            box = _find_search_box(page)
+            if box is None:
+                # Many sites hide the box behind a search icon or button: open it, then look again.
+                for toggle in SEARCH_TOGGLES:
+                    try:
+                        page.locator(toggle).first.click(timeout=2_000)
+                        page.wait_for_timeout(700)
+                    except Exception:  # noqa: BLE001 - no such toggle on this site
+                        continue
+                    if (box := _find_search_box(page)) is not None:
+                        break
+            if box is None:
+                raise BrowserError(f"no search box found on {url}")
+            box.fill(query, timeout=5_000)
+            box.press("Enter")
+            try:
+                page.wait_for_load_state("networkidle", timeout=12_000)
+            except Exception:  # noqa: BLE001 - results that stream in still leave a readable page
+                page.wait_for_timeout(2_000)
+            return page.url, page.content()
+        finally:
+            context.close()
+
     def close(self) -> None:
         self._thread.submit(self._close).result()
 
@@ -121,6 +157,26 @@ class _Browser:
         if self._pw is not None:
             self._pw.stop()
             self._pw = None
+
+
+SEARCH_BOXES = ('input[type="search"]', 'input[name="q"]', 'input[name="query"]', 'input[name="search"]',
+                'input[name="s"]', 'input[name="keywords"]', 'input[name="keyword"]', 'input[name*="search" i]',
+                'input[id*="search" i]', 'input[placeholder*="search" i]', 'input[aria-label*="search" i]',
+                'input[title*="search" i]')
+SEARCH_TOGGLES = ('button[aria-label*="search" i]', 'a[aria-label*="search" i]', 'button[class*="search" i]',
+                  'a[class*="search-toggle" i]', '[role="button"][aria-label*="search" i]')
+
+
+def _find_search_box(page):
+    for selector in SEARCH_BOXES:
+        loc = page.locator(selector)
+        try:
+            for i in range(min(loc.count(), 4)):
+                if loc.nth(i).is_visible() and loc.nth(i).is_editable():
+                    return loc.nth(i)
+        except Exception:  # noqa: BLE001 - a detached element: try the next selector
+            continue
+    return None
 
 
 _browser = _Browser()
@@ -244,6 +300,13 @@ def fetch_text(url: str) -> str:
     html = _browser.html(url)
     _check_blocked(html)
     return _html_text(html)[:MAX_TEXT]
+
+
+def search_site(url: str, query: str) -> tuple[str, str]:
+    """(results URL, HTML) from the site's own search box. Raises on a bot wall or if there is no box."""
+    final, html = _browser.search_site(url, query)
+    _check_blocked(html)
+    return final, html
 
 
 def fetch_page(url: str) -> tuple[str, str]:

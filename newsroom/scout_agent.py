@@ -56,11 +56,14 @@ TOOLS = {
     "open": ("URL or result ref", "open a page the way a person browsing would: its title, opening text and its links, each "
              "a new ref. Navigate an agency's report index, a filing list or a docket, or a record site's own search page "
              "(build its URL yourself), without a search engine. Then read the page you need"),
+    "search_site": ("site | query", "search one website with its own search box, the way a person would, e.g. "
+                    "atlaudit.org | water billing, or courtlistener.com | Tioga-Franklin. Results come back as refs. Use "
+                    "it instead of web_search whenever you know which site holds the record"),
     "web_search": ("query", "general web search: short queries work best, site:agency.gov helps. Scarce and partly paid: "
                    "when you know which site holds the record, open it instead"),
     "read": ("URL or result ref like R4", "read one page or record and pull the exact quotes that bear on your statement"),
 }
-COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "open", "read")
+COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "search_site", "open", "read")
 MAX_LINKS_SHOWN = 20
 
 STEP = """
@@ -182,6 +185,8 @@ class Scout:
             return self._read(arg)
         if tool == "open":
             return self._open(arg)
+        if tool == "search_site":
+            return self._search_site(arg)
         if tool == "fdic_bank":
             # One bank's record is short and always worth reading: read it now rather than leave it in the list.
             refs = self._official(records.fdic_bank(arg))
@@ -278,7 +283,18 @@ class Scout:
             return routed
         if not url.startswith("http"):
             return f"can't open {arg!r}: give a URL or a result ref"
-        page = web.open_page(url)
+        return self._show(web.open_page(url))
+
+    def _search_site(self, arg: str) -> str:
+        site, query = _pipe(arg, 2)
+        if not site or not query:
+            return "give a site and a query: site.gov | words"
+        page = web.search_site(site, query)
+        if page.get("error"):
+            return f"couldn't search it: {page['error']}. Open the site and follow its links instead"
+        return self._show(page)
+
+    def _show(self, page: dict) -> str:
         if page.get("blocked"):
             return "behind a bot check; not bypassing it. Try another site or source"
         if not page["text"]:

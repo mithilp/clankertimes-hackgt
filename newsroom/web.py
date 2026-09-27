@@ -133,6 +133,25 @@ def open_page(url: str) -> dict:
                 remember(url, text)
             return {"url": final, "title": "", "text": text, "links": []}
         html = response.text
+    return _page(url, final, html)
+
+
+def search_site(site: str, query: str) -> dict:
+    """A site searched with its own search box, the way a person would: {url, title, text, links}.
+    For sites whose records aren't in a general search engine, or when the engines are paused."""
+    from . import browser
+    url = site if site.startswith("http") else f"https://{site.strip('/')}"
+    try:
+        final, html = browser.search_site(url, query)
+    except browser.Blocked:
+        return {"url": url, "title": "", "text": "", "links": [], "blocked": True}
+    except browser.BrowserError as e:
+        return {"url": url, "title": "", "text": "", "links": [], "error": str(e)[:200]}
+    return _page(final, final, html)
+
+
+def _page(url: str, final: str, html: str) -> dict:
+    from urllib.parse import urljoin
     soup = BeautifulSoup(html, "html.parser")
     title = (soup.title.get_text(" ", strip=True) if soup.title else "")[:200]
     links, seen = [], set()

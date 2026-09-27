@@ -52,7 +52,7 @@ Say exactly what you searched: which system, which terms, which date range. "No 
 
 ## Record sites you can open directly
 
-Web search is scarce. When the record lives on one of these systems, `open` the page and follow its links; each link becomes a ref you can `open` or `read`. Pages built with JavaScript render fine.
+Web search is scarce. When you know which site holds the record, use `search_site` (site | words) to search it with its own search box, or `open` a page and follow its links; each link becomes a ref you can `open` or `read`. Pages built with JavaScript render fine. `search_site` works on most sites with a search box (the Atlanta auditor, the Technique, CourtListener, agency sites); if a site shows a bot check, move on.
 
 - **Georgia Public Service Commission:** a docket is `https://psc.ga.gov/search/facts-docket/?docketId=NNNNN` (lists its documents); a document is `https://psc.ga.gov/search/facts-document/?documentId=NNNNN`, and opening it lists the files as `.../DownloadFile/<documentId>/<fileId>` links. A URL with only one number after DownloadFile is wrong: open the document page instead.
 - **SEC EDGAR:** use `sec_filings` for full-text search. Filing documents open directly under `https://www.sec.gov/Archives/edgar/data/...`.
