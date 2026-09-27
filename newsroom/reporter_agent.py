@@ -1167,7 +1167,7 @@ class Investigation:
     def draft(self, decision: dict, sources: dict) -> tuple[dict | None, list[str]]:
         prompt = self._writer_input(decision, sources)
         problems: list[str] = []
-        for _ in range(3):
+        for _ in range(4):
             text = prompt if not problems else prompt + "\n\nYour last draft failed these checks; fix them:\n" + "\n".join(problems)
             d = self.ask(WRITE, text, max_tokens=6000)
             d = _draft(d)
@@ -1576,8 +1576,9 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
     from .signals import Signal
     path = Path(path)
     result = json.loads(path.read_text(encoding="utf-8"))
-    if not result.get("article") or not result.get("council"):
-        raise ValueError(f"{path} has no draft and council review to resume")
+    fresh = not result.get("article") or not result.get("council")
+    if fresh and (result.get("verdict") or {}).get("verdict") != "write":
+        raise ValueError(f"{path} has neither a draft nor a write verdict to resume from")
     inv = Investigation(result["hypothesis"], budget=10, rounds=MAX_ROUNDS, desk=desk if desk is not None else get_desk(), say=say)
     inv.frame, inv.plan, inv.sizing = result.get("frame") or {}, result.get("plan") or {}, result.get("sizing") or {}
     inv.coverage = {"report": result.get("coverage") or {}, "findings": [], "trail": []}
@@ -1587,12 +1588,22 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
     inv.leads, inv.rounds = result.get("leads", []), result.get("rounds", [])
     inv.spinoffs, inv.declined, inv.memory = result.get("spinoffs", []), result.get("declined", []), []
     inv.record_id = result.get("desk_id", "")
-    decision, sources = result["verdict"], result["article"]["sources"]
-    last = result["council"][-1]
-    say(f"resuming at the council: {result['article']['draft'].get('headline', '')}")
-    plan = inv.triage(result["article"]["draft"], sources, last["review"])
-    researched = bool(plan.get("research")) and inv.research(plan["research"], sources)
-    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"], plan=plan, researched=researched)
+    decision = result["verdict"]
+    if fresh:
+        # The reporting was done and the verdict was write, but no draft passed its checks: draft again.
+        say(f"resuming at the draft: {decision.get('narrowed_hypothesis') or decision.get('why', '')[:150]}")
+        sources = inv.sources()
+        revised, problems = inv.draft(decision, sources)
+        if revised is None:
+            say(f"  the draft still fails its checks: {'; '.join(problems[:3])}")
+        result["council"], last = [], {"review": None}
+    else:
+        sources = result["article"]["sources"]
+        last = result["council"][-1]
+        say(f"resuming at the council: {result['article']['draft'].get('headline', '')}")
+        plan = inv.triage(result["article"]["draft"], sources, last["review"])
+        researched = bool(plan.get("research")) and inv.research(plan["research"], sources)
+        revised = inv.revise(decision, result["article"]["draft"], sources, last["review"], plan=plan, researched=researched)
     if revised is None:
         final = {"status": "held", "note": "the revision still failed its checks"}
         result.update(final=final)
