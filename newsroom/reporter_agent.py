@@ -687,6 +687,16 @@ class Investigation:
                 except Exception as e:  # noqa: BLE001 - recorded; coverage stays unknown if every one fails
                     ran.append({"tool": "news_search", "arg": q, "why": "prior coverage (run by the reporter)",
                                 "result": f"failed: {type(e).__name__}: {e}"[:200]})
+                # Google News misses trade press and niche finance coverage; a general search (Firecrawl when the
+                # browser engines are paused) catches it.
+                try:
+                    found = web.search(q, count=8)
+                    ran.append({"tool": "web_search", "arg": q, "why": "prior coverage (run by the reporter)",
+                                "result": f"{len(found)} results"})
+                    hits += [{"url": r["url"], "title": r["title"], "description": r.get("description", "")} for r in found]
+                except Exception as e:  # noqa: BLE001
+                    ran.append({"tool": "web_search", "arg": q, "why": "prior coverage (run by the reporter)",
+                                "result": f"failed: {type(e).__name__}: {e}"[:200]})
             self.say(f"  coverage: web search down; the reporter ran {len(queries)} news search(es) itself, "
                      f"{len(hits)} results for the scout to read")
             first = self.coverage
