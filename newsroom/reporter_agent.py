@@ -223,6 +223,9 @@ Sources:
 - "F1", "F2", ... are the scouts' findings, each a quote checked against its page, with its source type.
 
 Rules:
+- This newsroom is automated and does not contact anyone. Give the accountable party's own public words where
+  the sources have them (statements, filings, testimony), and end with one plain sentence saying the Clanker
+  Times did not contact them for this story. Never write that comment was sought or declined.
 - Write the story the evidence supports: the maximum story only if the verdict says so, otherwise the
   minimum story. Sub-hypotheses marked unsupported are unknowns: say what is not established, or leave them out.
 - Lead with the NEW finding: what this reporting established that no outlet had published (it's given

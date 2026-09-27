@@ -29,6 +29,10 @@ Judge the draft below as the playbook above describes. Reply with JSON only:
   "notes": "anything else the reporter should know, briefly"
 }
 "approve" means you have no problems that should stop publication. Every problem must quote a sentence.
+
+House rule: this newsroom is automated and cannot call or email anyone, so it never seeks comment. Don't ask
+for a response to be sought. Do require the accountable party's own public words where the sources have them,
+and a plain line saying the newsroom did not contact them.
 """
 
 
