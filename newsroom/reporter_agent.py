@@ -1085,7 +1085,7 @@ class Investigation:
                                f"Maximum story: {self.frame.get('maximum_story', '')}\n"
                                f"Innocent explanations named in the plan: {'; '.join(_strs(self.plan.get('alternatives'))) or '(none)'}\n\n"
                                f"VERDICT BY THE RULES: {v}{' (' + story + ' story)' if story else ''}: {why}\n\n{self._status_listing()}",
-                         max_tokens=3000)
+                         max_tokens=6000)
         order = {"write": 2, "park": 1, "kill": 0}
         down = str(reply.get("downgrade_to") or "").lower()
         downgraded = None
