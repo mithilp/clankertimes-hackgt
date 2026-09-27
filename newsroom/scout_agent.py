@@ -59,6 +59,10 @@ TOOLS = {
     "search_site": ("site | query", "search one website with its own search box, the way a person would, e.g. "
                     "atlaudit.org | water billing, or courtlistener.com | Tioga-Franklin. Results come back as refs. Use "
                     "it instead of web_search whenever you know which site holds the record"),
+    "browse": ("start URL | what to find", "a browser agent that uses the site like a person: clicks menus, fills search "
+               "forms and filters, pages through results, until it finds what you describe, e.g. https://emma.msrb.org | "
+               "Atlanta water and sewer revenue bonds official statement 2024. Pages it ends on come back as refs to read. "
+               "Best for sites with forms, filters or JavaScript search that open and search_site can't handle"),
     "web_search": ("query", "general web search: short queries work best, site:agency.gov helps. Scarce and partly paid: "
                    "when you know which site holds the record, open it instead"),
     "read": ("URL or result ref like R4", "read one page or record and pull the exact quotes that bear on your statement"),
@@ -87,6 +91,20 @@ When a source that counts has settled the statement either way (or nothing left 
 {{"finish": true}}. Otherwise reply with JSON only:
 {{"calls": [{{"tool": "...", "arg": "...", "why": "..."}}]}}
 """
+
+BROWSE = """You are operating a web browser for a newsroom researcher, one action at a time, to reach the goal.
+You see the page's text and its numbered clickable and typeable elements. Choose ONE action:
+  {"do": "click", "id": 12, "why": "..."}
+  {"do": "type", "id": 3, "text": "search words", "enter": true, "why": "..."}   (fill a search box or form field)
+  {"do": "select", "id": 7, "text": "option label", "why": "..."}
+  {"do": "goto", "url": "https://...", "why": "..."}
+  {"do": "back", "why": "..."}
+  {"do": "done", "note": "what you found and where, or why it isn't here", "keep": ["urls worth reading"], "why": "..."}
+Use the site's own search forms and filters. Prefer official documents (PDFs, filings, reports) over news pages.
+Stop with "done" as soon as the page that holds the answer is open, or when the site clearly doesn't have it.
+Never try to get past a login, paywall, CAPTCHA or bot check. Never accept terms of use, agreements or
+consent on the newsroom's behalf: for a cookie banner, choose "reject", "necessary only" or close it; if the
+site won't show anything until terms are accepted, stop with "done" and say so. Reply with JSON only."""
 
 REPORT = """
 # Your job right now: report back to your reporter
@@ -187,6 +205,8 @@ class Scout:
             return self._open(arg)
         if tool == "search_site":
             return self._search_site(arg)
+        if tool == "browse":
+            return self._browse(arg)
         if tool == "fdic_bank":
             # One bank's record is short and always worth reading: read it now rather than leave it in the list.
             refs = self._official(records.fdic_bank(arg))
@@ -284,6 +304,37 @@ class Scout:
         if not url.startswith("http"):
             return f"can't open {arg!r}: give a URL or a result ref"
         return self._show(web.open_page(url))
+
+    def _browse(self, arg: str) -> str:
+        from . import browser
+        from .scout import relevant_text
+        start, goal = _pipe(arg, 2)
+        start, _ = self._resolve(start)
+        if not start.startswith("http") or not goal:
+            return "give a start URL and what to find: https://site.gov | what you're looking for"
+
+        def decide(state: dict) -> dict:
+            elements = "\n".join(f"[{e['id']}] {e['tag']}{'(' + e['type'] + ')' if e['type'] else ''} {e['label']}"
+                                  + (f" -> {e['href'][:90]}" if e['href'] else "") + (f" options: {e['opts']}" if e['opts'] else "")
+                                  for e in state["elements"])
+            return llm.ask_json(BROWSE, f"GOAL: {goal}\nContext: {self.statement}\n\nStep {state['step'] + 1} of "
+                                        f"{state['max_steps']}. You did so far: {'; '.join(state['history']) or '(nothing)'}\n\n"
+                                        f"PAGE: {state['title']}\n{state['url']}\n\nTEXT:\n"
+                                        f"{relevant_text(state['text'], goal, 7000)}\n\nELEMENTS:\n{elements[:9000]}",
+                                model=self.fast, max_tokens=800)
+        try:
+            result = browser.browse(start, decide)
+        except browser.BrowserError as e:
+            return f"couldn't browse it: {str(e)[:150]}"
+        refs = []
+        for url, (title, text) in list(result["pages"].items())[-6:]:
+            if text:
+                web.remember(url, text)
+            if ref := self._hit(url, f"[browsed] {title or web.host(url)}", text[:160] if text else ""):
+                refs.append(ref)
+        steps = " > ".join(result["steps"][-8:])
+        return (f"browsed {len(result['steps'])} steps ({steps[:400]}). {result['note'][:300]}\n      "
+                + self._listing(refs, "pages to read"))
 
     def _search_site(self, arg: str) -> str:
         site, query = _pipe(arg, 2)

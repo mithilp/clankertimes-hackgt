@@ -346,3 +346,98 @@ def _check_blocked(html: str) -> None:
 
 def close() -> None:
     _browser.close()
+
+
+# --- an agent that uses a site the way a person does ---------------------------------------------
+
+_MARK = """() => {
+  const els = [...document.querySelectorAll('a[href], button, input, select, textarea, [role="button"], [role="link"], [role="tab"], [onclick]')];
+  const out = []; let n = 0;
+  for (const el of els) {
+    const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+    if (r.width < 2 || r.height < 2 || st.visibility === 'hidden' || st.display === 'none') continue;
+    if (el.type === 'hidden') continue;
+    el.setAttribute('data-agent-id', String(n));
+    const label = (el.innerText || el.value || el.getAttribute('aria-label') || el.getAttribute('placeholder') ||
+                   el.getAttribute('title') || el.name || '').trim().replace(/\\s+/g, ' ').slice(0, 90);
+    const opts = el.tagName === 'SELECT' ? [...el.options].slice(0, 12).map(o => o.text.trim()).join(' / ') : '';
+    out.push({id: n, tag: el.tagName.toLowerCase(), type: el.type || '', label, href: el.href || '', opts});
+    if (++n >= 150) break;
+  }
+  return out;
+}"""
+
+
+def browse(start: str, decide, max_steps: int = 12) -> dict:
+    """Drive one browser tab toward a goal. `decide(state)` sees the page (url, title, text, numbered elements,
+    history) and returns an action: {"do": "click"|"type"|"select"|"goto"|"back"|"done", "id", "text",
+    "enter", "url", "note", "keep": [urls]}. Stops at a bot check (never bypassed). Returns {pages, note, steps}."""
+    return _browser._thread.submit(_browse, start, decide, max_steps).result()
+
+
+def _browse(start: str, decide, max_steps: int) -> dict:
+    from .web import _html_text
+    browser = _browser._ensure()
+    context = browser.new_context(user_agent=_UA, locale="en-US", accept_downloads=False)
+    pages, history, note = {}, [], ""
+    try:
+        page = context.new_page()
+        page.goto(start, wait_until="domcontentloaded", timeout=45_000)
+        for step in range(max_steps):
+            try:
+                page.wait_for_load_state("networkidle", timeout=6_000)
+            except Exception:  # noqa: BLE001 - busy pages still render
+                pass
+            html, elements = "", []
+            for _ in range(4):          # a page mid-navigation refuses to be read: let it settle and retry
+                try:
+                    html, elements = page.content(), page.evaluate(_MARK)
+                    break
+                except Exception:  # noqa: BLE001
+                    page.wait_for_timeout(1_500)
+            try:
+                _check_blocked(html)
+            except Blocked:
+                note = f"stopped: {page.url} shows a bot check (not bypassed)"
+                break
+            text = _html_text(html)
+            pages[page.url] = (page.title(), text)
+            action = decide({"url": page.url, "title": page.title(), "text": text, "elements": elements,
+                             "history": history, "step": step, "max_steps": max_steps}) or {}
+            do = str(action.get("do", "")).lower()
+            history.append(f"{do} {action.get('id', '')} {action.get('text', '') or action.get('url', '')}"
+                           f" - {action.get('why', '')}".strip())
+            if do == "done" or not do:
+                note = str(action.get("note", ""))
+                for url in action.get("keep", []) or []:
+                    pages.setdefault(str(url), ("", ""))
+                break
+            try:
+                target = page.locator(f'[data-agent-id="{action.get("id")}"]').first
+                if do == "click":
+                    href = next((e["href"] for e in elements if str(e["id"]) == str(action.get("id"))), "")
+                    if href.lower().split("?")[0].endswith(".pdf"):
+                        pages.setdefault(href, ("", ""))       # a document: the scout reads it over HTTP
+                        history[-1] += " (PDF kept for reading)"
+                        continue
+                    target.click(timeout=8_000)
+                elif do == "type":
+                    target.fill(str(action.get("text", "")), timeout=6_000)
+                    if action.get("enter", True):
+                        target.press("Enter")
+                elif do == "select":
+                    target.select_option(label=str(action.get("text", "")), timeout=6_000)
+                elif do == "goto":
+                    page.goto(str(action.get("url")), wait_until="domcontentloaded", timeout=45_000)
+                elif do == "back":
+                    page.go_back(timeout=15_000)
+                page.wait_for_timeout(800)
+            except Exception as e:  # noqa: BLE001 - a failed action is information for the next step
+                history[-1] += f" (failed: {str(e)[:80]})"
+        else:
+            note = note or "ran out of steps"
+    except Exception as e:  # noqa: BLE001
+        note = f"browser error: {str(e)[:160]}"
+    finally:
+        context.close()
+    return {"pages": pages, "note": note, "steps": history}
