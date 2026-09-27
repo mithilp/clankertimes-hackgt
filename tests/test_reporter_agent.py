@@ -632,3 +632,16 @@ def test_the_coverage_scout_goes_again_with_news_search_when_web_search_is_down(
     assert searched and len(tasks) == 2 and tasks[1]["tools"] == ["read", "news_search"]
     # It reads the pages behind McLovin's signals too: the story that started it is prior coverage.
     assert [lead["url"] for lead in leads_seen[1]][-1] == "https://news.example/1" and len(leads_seen[1]) >= 1
+
+
+def test_on_a_revision_each_judge_sees_its_own_earlier_problems(env, monkeypatch):
+    rounds = iter([{"verdict": "revise", "problems": [{"sentence": "headline", "issue": "buried lead", "fix": "lead with it"}],
+                    "notes": ""}, APPROVE])
+    model = FakeModel(skeptic=lambda user: next(rounds))
+    monkeypatch.setattr(llm, "ask_json", model)
+    fake_scouts(monkeypatch)
+    assert run()["final"]["status"] == "published"
+    first, second = [u for s, u in model.calls if s == "skeptic"]
+    assert "THIS IS A REVISION" not in first
+    assert "THIS IS A REVISION" in second and "buried lead" in second
+    assert "THIS IS A REVISION" not in [u for s, u in model.calls if s == "virality"][-1]   # it approved round 1

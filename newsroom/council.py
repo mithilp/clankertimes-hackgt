@@ -46,15 +46,28 @@ def render(draft: dict) -> str:
     return f"HEADLINE: {a['headline']}\n\nSENTENCES:\n{body}\n\nSOURCES:\n\n{listing}"
 
 
-def judge(name: str, draft: dict, *, web_search: bool = True) -> dict:
+REVISION = """
+
+THIS IS A REVISION. Your problems with the previous draft were:
+{earlier}
+
+First check whether each was fixed. Then raise a new problem only if it should stop publication: a claim
+the sources don't support, an unfair or misleading framing, a buried or wrong lead, a missing response or
+caveat a reader needs. Wording and polish you would still change go in "notes" with an "approve"."""
+
+
+def judge(name: str, draft: dict, *, web_search: bool = True, earlier: dict | None = None) -> dict:
     extra = ""
+    if earlier:
+        listed = "\n".join(f"- \"{p.get('sentence', '')}\": {p.get('issue', '')}" for p in earlier.get("problems", [])) or "(none)"
+        extra += REVISION.format(earlier=listed)
     if name == "novelty" and web_search:
         try:
             hits = web.search(draft["article"]["headline"], count=8)
-            extra = "\n\nPRIOR COVERAGE SEARCH (top results for the headline):\n" + "\n".join(
+            extra += "\n\nPRIOR COVERAGE SEARCH (top results for the headline):\n" + "\n".join(
                 f"- {h['title']} ({h['url']}): {h.get('description', '')[:200]}" for h in hits)
         except Exception as e:  # noqa: BLE001 - the judge can still rule on the draft alone
-            extra = f"\n\n(prior coverage search failed: {e}; judge from the draft alone and say so)"
+            extra += f"\n\n(prior coverage search failed: {e}; judge from the draft alone and say so)"
     system = playbooks.load(f"council/{name}") + "\n" + OUTPUT
     reply = llm.ask_json(system, render(draft) + extra, model=config.load().smart_model, max_tokens=4000)
     verdict = str(reply.get("verdict", "")).lower()
@@ -63,12 +76,14 @@ def judge(name: str, draft: dict, *, web_search: bool = True) -> dict:
             "notes": str(reply.get("notes", ""))}
 
 
-def review(draft: dict, judges=JUDGES, *, web_search: bool = True) -> dict:
-    """Mechanical checks first; judges only see drafts that pass them. The skeptic can block alone."""
+def review(draft: dict, judges=JUDGES, *, web_search: bool = True, previous: dict | None = None) -> dict:
+    """Mechanical checks first; judges only see drafts that pass them. The skeptic can block alone.
+    previous: the last round's review, so each judge checks its own earlier problems instead of starting over."""
     mechanical = article.check(draft["article"], draft["sources"])
     if mechanical:
         return {"verdict": "revise", "stage": "mechanical", "mechanical": mechanical, "judges": []}
-    results = [judge(j, draft, web_search=web_search) for j in judges]
+    before = {j["judge"]: j for j in (previous or {}).get("judges", []) if j.get("verdict") != "approve"}
+    results = [judge(j, draft, web_search=web_search, earlier=before.get(j)) for j in judges]
     verdict = "approve" if all(r["verdict"] == "approve" for r in results) else "revise"
     return {"verdict": verdict, "stage": "council", "mechanical": [], "judges": results}
 

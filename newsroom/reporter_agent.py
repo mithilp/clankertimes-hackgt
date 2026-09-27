@@ -1049,10 +1049,12 @@ class Investigation:
         return None, problems
 
     # 7. the council, and back to the reporter
-    def review(self, decision: dict, first: dict, sources: dict, judges: tuple[str, ...]) -> dict:
+    def review(self, decision: dict, first: dict, sources: dict, judges: tuple[str, ...],
+               previous: dict | None = None) -> dict:
         d, history = first, []
         for n in range(MAX_REVISIONS + 1):
-            result = council.review({"article": d, "sources": sources}, judges)
+            result = council.review({"article": d, "sources": sources}, judges,
+                                    previous=history[-1]["review"] if history else previous)
             entry = {"round": n + 1, "draft": d, "review": result, "at": now()}
             history.append(entry)
             flagged = [j["judge"] for j in result["judges"] if j["judge"] in GATE_JUDGES and j["verdict"] != "approve"]
@@ -1428,7 +1430,7 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
         final = {"status": "held", "note": "the revision still failed its checks"}
         result.update(final=final)
     else:
-        reviewed = inv.review(decision, revised, sources, judges)
+        reviewed = inv.review(decision, revised, sources, judges, previous=last["review"])
         result["council"] = result["council"] + reviewed["history"]
         result["article"] = {"draft": reviewed["draft"], "sources": sources}
         if reviewed["outcome"] == "approved":
