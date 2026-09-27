@@ -268,7 +268,12 @@ published. At least one of them flagged this draft. Decide:
   interesting version overstates the evidence, that it adds nothing to what is already reported, or that
   nobody affected would care even when told well. Don't spike over something a revision could fix.
 
-Reply with JSON only: {"decision": "fix|spike", "why": "...", "fixes": ["what you will change"]}
+If a fix needs a public record or number your sources don't have (a filed figure, a dataset value, a
+document's text), list it under "research" as a statement a scout can check, with the records to try.
+Scouts go out before you revise.
+
+Reply with JSON only: {"decision": "fix|spike", "why": "...", "fixes": ["what you will change"],
+ "research": [{"statement": "...", "records": ["..."]}]}
 """
 
 REVISE = """
@@ -1074,7 +1079,8 @@ class Investigation:
             self.say(f"  reporter: {tri['decision']} ({tri['why']})")
             if tri["decision"] == "spike":
                 return {"outcome": "spiked", "draft": d, "history": history, "why": tri["why"]}
-            revised = self.revise(decision, d, sources, result, plan=tri)
+            researched = bool(tri.get("research")) and self.research(tri["research"], sources)
+            revised = self.revise(decision, d, sources, result, plan=tri, researched=researched)
             if revised is None:
                 break
             d = revised
@@ -1093,15 +1099,29 @@ class Investigation:
         reply = self.ask(TRIAGE, f"{brief(self.h)}\n\nDRAFT:\n{council.render({'article': d, 'sources': sources}).split('SOURCES:')[0]}"
                                  f"\nCOUNCIL:\n{self._council_notes(result)}", max_tokens=1500)
         decision = "spike" if reply.get("decision") == "spike" and str(reply.get("why", "")).strip() else "fix"
-        return {"decision": decision, "why": str(reply.get("why", "")), "fixes": _strs(reply.get("fixes"))}
+        research = [r for r in reply.get("research", []) or [] if isinstance(r, dict) and str(r.get("statement", "")).strip()]
+        return {"decision": decision, "why": str(reply.get("why", "")), "fixes": _strs(reply.get("fixes")),
+                "research": research[:2]}
 
-    def revise(self, decision: dict, d: dict, sources: dict, result: dict, plan: dict | None = None) -> dict | None:
+    def research(self, asks: list[dict], sources: dict) -> bool:
+        """Send scouts for facts the council needs, and add what they find to the sources. True if any went."""
+        new = [self._add_sub({**r, "records_first": _strs(r.get("records")), "needed_for": "maximum",
+                              "priority": "high"}, origin="council") for r in asks[:2]]
+        new = [sub for sub in new if sub]
+        if not new:
+            return False
+        self.say(f"  reporter sends {len(new)} scout(s) for the council: " + "; ".join(sub["statement"] for sub in new))
+        self.dispatch(new)
+        self._merge_sources(sources)
+        return True
+
+    def revise(self, decision: dict, d: dict, sources: dict, result: dict, plan: dict | None = None,
+               researched: bool = False) -> dict | None:
         notes = self._council_notes(result)
         if plan and (plan.get("why") or plan.get("fixes")):
             notes += (f"\n\nYOUR OWN PLAN FOR THIS REVISION: {plan.get('why', '')}"
                       + "".join(f"\n- {f}" for f in plan.get("fixes", [])))
         rules = WRITE.split("Rules:", 1)[1].rsplit("Reply with JSON", 1)[0]
-        researched = False
         for attempt in range(3):      # research for the council doesn't use up a writing attempt
             reply = self.ask(REVISE + "\nRules:" + rules, f"{self._writer_input(decision, sources)}\n\nCURRENT DRAFT:\n"
                              f"{council.render({'article': d, 'sources': sources}).split('SOURCES:')[0]}\n\nCOUNCIL:\n{notes}",
@@ -1109,12 +1129,7 @@ class Investigation:
             asks = [r for r in reply.get("needs_research", []) if isinstance(r, dict) and str(r.get("statement", "")).strip()]
             if asks and not researched:
                 researched = True
-                new = [self._add_sub({**r, "records_first": _strs(r.get("records")), "needed_for": "maximum",
-                                      "priority": "high"}, origin="council") for r in asks[:2]]
-                if new := [s for s in new if s]:
-                    self.say(f"  reporter sends {len(new)} scout(s) for the council: " + "; ".join(s["statement"] for s in new))
-                    self.dispatch(new)
-                    self._merge_sources(sources)
+                if self.research(asks, sources):
                     continue
             revised = _draft(reply, previous=d)
             problems = article.check(revised, sources)
@@ -1432,7 +1447,9 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
     decision, sources = result["verdict"], result["article"]["sources"]
     last = result["council"][-1]
     say(f"resuming at the council: {result['article']['draft'].get('headline', '')}")
-    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"], plan=last.get("triage"))
+    plan = inv.triage(result["article"]["draft"], sources, last["review"])
+    researched = bool(plan.get("research")) and inv.research(plan["research"], sources)
+    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"], plan=plan, researched=researched)
     if revised is None:
         final = {"status": "held", "note": "the revision still failed its checks"}
         result.update(final=final)
