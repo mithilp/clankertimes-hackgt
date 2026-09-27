@@ -3,9 +3,11 @@ import { notFound } from "next/navigation";
 import Cite from "@/components/Cite";
 import Sample from "@/components/Sample";
 import Share from "@/components/Share";
+import Sources from "@/components/Sources";
 import Timeline from "@/components/Timeline";
 import { AUTHOR, OG_BASE, SITE_NAME, absolute } from "@/lib/site";
 import { BEAT_NAMES, SECTIONS, formatDate, getArticle, readingMinutes, sourceOrder } from "@/lib/articles";
+import { host, sourceGroup, type SourceItem } from "@/lib/sources";
 import { smart } from "@/lib/text";
 
 export const revalidate = 60;
@@ -39,6 +41,13 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
 
   const order = sourceOrder(article);
   const number = (id: string) => order.indexOf(id) + 1;
+  const sources: SourceItem[] = order.map((id, i) => {
+    const s = article.sources[id];
+    return {
+      id, n: i + 1, title: s.title.replace(/^\[(?:PDF|DOC|DOCX|XLS|XLSX)\]\s*/i, ""), group: sourceGroup(s.kind), host: host(s.url), url: s.url,
+      quote: s.quote ?? "", accessed: s.accessed ? formatDate(s.accessed) : "",
+    };
+  });
   const section = article.beats.find((b) => b in SECTIONS);
   const url = absolute(`/article/${article.slug}`);
   const jsonLd = {
@@ -109,26 +118,8 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
 
       <div className="notes">
         <Share url={url} title={article.headline} />
-        {article.timeline?.length ? <Timeline steps={article.timeline} /> : null}
-        <section aria-labelledby="sources">
-          <h2 id="sources">Sources</h2>
-          <ol className="sources">
-            {order.map((id, i) => {
-              const s = article.sources[id];
-              return (
-                <li key={id} id={`source-${id}`}>
-                  <span className="n">{i + 1}</span>
-                  <div>
-                    <span className="t">{s.title}</span>
-                    <div className="kind">{[s.publisher, s.kind, s.accessed && `retrieved ${formatDate(s.accessed)}`].filter(Boolean).join(" · ")}</div>
-                    {s.quote && <q>{smart(s.quote)}</q>}
-                    <a href={s.url} target="_blank" rel="noopener noreferrer">{s.url}</a>
-                  </div>
-                </li>
-              );
-            })}
-          </ol>
-        </section>
+        {article.timeline?.length ? <Timeline steps={article.timeline} sources={order.length} /> : null}
+        <Sources items={sources} />
 
         <section aria-labelledby="corrections">
           <h2 id="corrections">Corrections</h2>

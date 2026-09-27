@@ -1,8 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { Source } from "@/lib/articles";
 import { smart } from "@/lib/text";
+
+const MARGIN = 12;   // the closest a popover gets to the edge of the screen
 
 // A footnote number after a sentence. Hovering or focusing it shows the exact passage the sentence
 // rests on; clicking pins that open (tap on phones). Without JavaScript it is a plain link to the
@@ -11,6 +13,7 @@ export default function Cite({ n, id, source }: { n: number; id: string; source:
   const [hover, setHover] = useState(false);
   const [pinned, setPinned] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
+  const pop = useRef<HTMLSpanElement>(null);
   const open = hover || pinned;
 
   useEffect(() => {
@@ -26,6 +29,27 @@ export default function Cite({ n, id, source }: { n: number; id: string; source:
     };
   }, [pinned]);
 
+  // Keep the popover on screen: centered on its footnote, but slid sideways where that would cross an edge,
+  // and opened upward when there is no room below. Placed before paint, so it never visibly jumps.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const place = () => {
+      const el = pop.current, note = ref.current;
+      if (!el || !note) return;
+      el.classList.remove("above");
+      const at = note.getBoundingClientRect();
+      const width = el.offsetWidth;
+      const screen = document.documentElement.clientWidth;
+      const left = Math.min(Math.max(at.left + at.width / 2 - width / 2, MARGIN), screen - MARGIN - width);
+      el.style.left = `${Math.round(left - at.left)}px`;
+      const box = el.getBoundingClientRect();
+      if (box.bottom > window.innerHeight - MARGIN && at.top > box.height + MARGIN) el.classList.add("above");
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [open]);
+
   return (
     <span ref={ref} className="cite-wrap" onMouseEnter={() => setHover(true)} onMouseLeave={() => setHover(false)}>
       <a
@@ -40,7 +64,7 @@ export default function Cite({ n, id, source }: { n: number; id: string; source:
         {n}
       </a>
       {open && (
-        <span className="pop" role="tooltip">
+        <span ref={pop} className="pop" role="tooltip">
           <span className="src">{source.title}</span>
           <span className="meta">{[source.publisher, source.kind].filter(Boolean).join(" · ")}</span>
           {source.quote && <q>{smart(source.quote)}</q>}

@@ -1,4 +1,5 @@
 import Link from "next/link";
+import ThemeToggle from "@/components/ThemeToggle";
 import { SECTIONS } from "@/lib/articles";
 
 export default function Masthead() {
@@ -9,7 +10,10 @@ export default function Masthead() {
     <header>
       <div className="topbar">
         <span><b>{today}</b></span>
-        <span>Reported, written and checked by AI agents</span>
+        <span className="end">
+          <span>Reported, written and checked by AI agents</span>
+          <ThemeToggle />
+        </span>
       </div>
       <div className="masthead">
         <Link href="/" className="name">The Clanker Times</Link>
