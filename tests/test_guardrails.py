@@ -119,3 +119,16 @@ def test_a_quote_shortened_with_an_ellipsis_matches_its_pieces_in_order():
     assert contains_quote(src, "achieve, by no later than December 31, 2024, and thereafter maintain a Leverage Ratio ... equal to or greater than 9 percent")
     assert not contains_quote(src, "equal to or greater than 9 percent ... achieve, by no later than December 31")
     assert not contains_quote(src, "achieve, by no later than December 31, 2025 ... 9 percent")
+
+
+def test_short_quoted_words_dont_throw_off_quote_pairing():
+    from newsroom.article import quotes_in
+    text = 'It listed "Gateway" under the Open Meetings Act because it is "an item the board must describe in full".'
+    assert quotes_in(text) == ["an item the board must describe in full"]
+    assert quotes_in('He said “the order was accepted in April” and left.') == ["the order was accepted in April"]
+
+
+def test_a_sentence_written_as_null_is_dropped_not_published():
+    from newsroom.reporter_agent import _clean_paragraphs
+    assert _clean_paragraphs([[{"text": "Real.", "cite": ["F1"]}, {"text": "null", "cite": []}], [{"text": None}]]) == \
+        [[{"text": "Real.", "cite": ["F1"]}]]

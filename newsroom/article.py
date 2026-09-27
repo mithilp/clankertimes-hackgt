@@ -34,6 +34,20 @@ CRIMINAL_LABEL = re.compile(
     r"|cover(?:ed)? up|illegal(?:ly)?|criminal(?:ly)?)\b", re.I)
 
 # The data is current through a date. Present-tense absolutes outrun it.
+def quotes_in(text: str) -> list[str]:
+    """The quoted passages in a sentence long enough to check (10+ characters), with quotation marks paired in
+    order. Short quoted words ("Gateway") still count as a pair, so the text between two quotes is never
+    mistaken for a quote."""
+    spans, open_at = [], None
+    for i, ch in enumerate(text):
+        if ch == "“" or (ch == '"' and open_at is None):
+            open_at = i
+        elif (ch == "”" or ch == '"') and open_at is not None:
+            spans.append(text[open_at + 1:i])
+            open_at = None
+    return [q for q in spans if len(q) >= 10]
+
+
 IN_QUOTES = re.compile(r'"[^"]*"|“[^”]*”')      # any quoted stretch, for checks that skip a source's own words
 TIMELESS = re.compile(r"\b(?:as of today|as of now|currently|right now|to date|so far this year)\b", re.I)
 
@@ -65,7 +79,7 @@ def check(article: dict, sources: dict[str, dict]) -> list[str]:
             elif unknown := [c for c in cites if c not in sources]:
                 problems.append(f"{where}: cites unknown source {', '.join(map(str, unknown))}")
             else:
-                for quote in QUOTED.findall(text):
+                for quote in quotes_in(text):
                     if not any(contains_quote(sources[c]["text"], quote) for c in cites):
                         problems.append(f'{where}: quote not found in its sources: "{quote}"')
             problems += _sentence_gates(where, text, cites)

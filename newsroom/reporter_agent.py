@@ -1404,7 +1404,17 @@ def _draft(reply: dict, previous: dict | None = None) -> dict:
             "dek": str(reply.get("dek") or previous.get("dek") or "").strip(),
             **{k: str(reply.get(k) if reply.get(k) is not None else previous.get(k) or "").strip()
                for k in ("found", "prior", "why_it_matters")},
-            "paragraphs": reply.get("paragraphs") or []}
+            "paragraphs": _clean_paragraphs(reply.get("paragraphs"))}
+
+
+def _clean_paragraphs(paragraphs) -> list:
+    """Drop sentences a model deleted by writing null or nothing, and paragraphs left empty by that."""
+    out = []
+    for p in paragraphs or []:
+        kept = [s for s in (p or []) if isinstance(s, dict) and str(s.get("text") or "").strip().lower() not in ("", "null", "none")]
+        if kept:
+            out.append(kept)
+    return out
 
 
 def hard_checks(result: dict) -> list[str]:
