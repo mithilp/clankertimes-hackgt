@@ -503,7 +503,8 @@ sections, report codes, file names and internal labels unless the reader needs t
 ("a research agent", "another research agent"); never "scout 3" or "H2". Make the steps read as a sequence:
 "A research agent confirmed...", "Another research agent then found...". A hunch step starts "An agent had a
 hunch that".
-Keep each step under 45 words. Leave out steps about the mechanics of the reporting itself (duplicate links,
+Keep each step under 45 words. A reporter step that changes course must say what the new story is, in plain
+words. Leave out research steps about a different story than the one in the hunch and the reporter's steps. Leave out steps about the mechanics of the reporting itself (duplicate links,
 which reporter wrote an article, company descriptions everyone knows): return "" for those research steps.
 Keep the records' own terms for legal actions ("consent order", "civil money penalty", "lawsuit"), with a few
 plain words of explanation if needed; never swap in a milder or different word ("warning" is not a consent
