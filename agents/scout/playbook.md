@@ -49,3 +49,17 @@ Say exactly what you searched: which system, which terms, which date range. "No 
 - **Archive what you rely on.** Save the page text when you fetch it. Pages change or disappear, especially after the subject learns a story is coming.
 - **Anything a model produced is not a source**, including text you pasted into a model for another reason. In February 2026 Ars Technica retracted a story because a reporter pasted text into ChatGPT to debug a refusal and invented quotes came back. ([404 Media](https://www.404media.co/ars-technica-pulls-article-with-ai-fabricated-quotes-about-ai-generated-article/))
 - **Stay on your sub-hypothesis.** If you find something bigger, propose it as a new hypothesis with the records that would settle it. Don't chase it on your budget.
+
+## Record sites you can open directly
+
+Web search is scarce. When the record lives on one of these systems, `open` the page and follow its links; each link becomes a ref you can `open` or `read`. Pages built with JavaScript render fine.
+
+- **Georgia Public Service Commission:** a docket is `https://psc.ga.gov/search/facts-docket/?docketId=NNNNN` (lists its documents); a document is `https://psc.ga.gov/search/facts-document/?documentId=NNNNN`, and opening it lists the files as `.../DownloadFile/<documentId>/<fileId>` links. A URL with only one number after DownloadFile is wrong: open the document page instead.
+- **SEC EDGAR:** use `sec_filings` for full-text search. Filing documents open directly under `https://www.sec.gov/Archives/edgar/data/...`.
+- **Municipal bonds:** `https://emma.msrb.org/IssuerHomePage/State?state=GA` (issuers by state), then the issuer's official statements and continuing disclosures.
+- **Bank regulators:** FDIC orders `https://orders.fdic.gov/s/`; Federal Reserve actions `https://www.federalreserve.gov/supervisionreg/enforcementactions.htm`; OCC actions `https://www.occ.gov/topics/laws-and-regulations/enforcement-actions/index-enforcement-actions.html`; CFPB actions `https://www.consumerfinance.gov/enforcement/actions/`.
+- **Nonprofits (IRS 990s):** `https://projects.propublica.org/nonprofits/search?q=NAME`.
+- **Congress financial disclosures:** `https://disclosures-clerk.house.gov/FinancialDisclosure`.
+- **Atlanta:** City Auditor `https://www.atlaudit.org/audit-reports.html`; City Council agendas and legislation `https://atlantacityga.iqm2.com/Citizens/Calendar.aspx`.
+- **Georgia:** Department of Audits `https://www.audits.ga.gov/`; state salaries and spending `https://open.ga.gov/`.
+- **Self-driving and driver-assist crashes:** use `nhtsa_sgo`, not the NHTSA website.
