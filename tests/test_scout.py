@@ -58,3 +58,13 @@ def test_scout_respects_its_budget(monkeypatch):
 
     scout.research("Something.", "context", budget=4)
     assert calls["search"] + calls["fetch"] == 4
+
+
+def test_a_long_document_is_read_where_it_bears_on_the_question():
+    from newsroom.scout import relevant_text
+    filler = "Routine boilerplate about governance and procedures. " * 2000
+    key = "The allowance for doubtful accounts in the water and sewer fund was $184,000,000 at June 30, 2025."
+    doc = "COVER PAGE. " + filler + key + filler
+    cut = relevant_text(doc, "water sewer allowance doubtful accounts 2025")
+    assert key in cut and cut.startswith("COVER PAGE") and len(cut) < len(doc) // 2
+    assert relevant_text("short page", "anything") == "short page"

@@ -7,6 +7,8 @@ isn't on the page is dropped. A scout stops when a source that counts as proof s
 or when its budget runs out.
 """
 
+import re
+
 from . import llm, web
 from .text import contains_quote
 
@@ -135,12 +137,34 @@ def choose(hypothesis: str, results: list[dict]) -> list[str]:
     return [u for u in reply.get("urls", []) if u in known]
 
 
+CHUNK = 2_500
+_STOPWORDS = {"that", "this", "with", "from", "which", "their", "there", "were", "have", "been", "than", "what",
+              "when", "whether", "would", "about", "into", "over", "under", "after", "before", "does", "including"}
+
+
+def relevant_text(text: str, about: str, limit: int = MAX_PAGE_CHARS) -> str:
+    """A long document cut to what bears on the question: the opening, then the passages that share the most
+    words and numbers with it, in document order. A 200-page audit's key table is rarely in its first pages."""
+    if len(text) <= limit:
+        return text
+    words = {w for w in re.findall(r"[a-z0-9][a-z0-9.,%$-]{3,}", about.lower()) if w not in _STOPWORDS}
+    chunks = [text[i:i + CHUNK] for i in range(0, len(text), CHUNK)]
+
+    def score(chunk: str) -> float:
+        low = chunk.lower()
+        return sum((3 if any(ch.isdigit() for ch in w) else 1) for w in words if w in low)
+    keep = {0} | {i for i in sorted(range(1, len(chunks)), key=lambda i: -score(chunks[i]))[:limit // CHUNK - 1]
+                  if score(chunks[i]) > 0}
+    return "\n[...]\n".join(chunks[i] for i in sorted(keep))[:limit + 200]
+
+
 def read(hypothesis: str, url: str, title: str, text: str, source_type: str | None = None, context: str = "") -> list[dict]:
     """Quotes from one page that bear on the hypothesis. source_type, if given, overrides the model's."""
     # Thinking mode: without it the model confuses different problems with the same product (tested on a
     # power-steering recall vs. a driver-assistance story); it costs ~800 more output tokens per page.
     reply = llm.ask_json(READ_SYSTEM, f"Story: {context}\nHypothesis: {hypothesis}\n\nPage: {title}\n{url}\n\n"
-                                      f"Page text:\n{text[:MAX_PAGE_CHARS]}", max_tokens=8000, thinking=True)
+                                      f"Page text:\n{relevant_text(text, f'{hypothesis} {context}')}",
+                         max_tokens=8000, thinking=True)
     if not reply.get("relevant") or reply.get("same_problem") is False:
         return []
     source_type = source_type or source_type_of(url, reply.get("source_type"))

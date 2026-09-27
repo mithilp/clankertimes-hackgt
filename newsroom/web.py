@@ -189,7 +189,7 @@ def _pdf_text(data: bytes) -> str:
     from pypdf import PdfReader
     try:
         reader = PdfReader(io.BytesIO(data))
-        return "\n".join(page.extract_text() or "" for page in reader.pages[:50])
+        return "\n".join(page.extract_text() or "" for page in reader.pages[:400])
     except Exception:  # malformed PDFs are common; treat them as unreadable
         return ""
 
