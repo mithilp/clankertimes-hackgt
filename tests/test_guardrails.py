@@ -98,3 +98,10 @@ def test_reddit_pauses_for_everyone_after_a_rate_limit_and_reuses_recent_fetches
     with pytest.raises(gather.RedditPaused, match="paused until"):
         gather.subreddit("gatech")                            # a different subreddit is skipped too
     assert len(calls) == 2                                    # ...without another request
+
+
+def test_a_quoted_source_may_say_currently():
+    from newsroom.article import _sentence_gates
+    assert not any("says what is true now" in p for p in _sentence_gates(
+        "p1", 'The university said the program "has 82 students currently enrolled."', ["F1"]))
+    assert any("says what is true now" in p for p in _sentence_gates("p1", "The program currently has 82 students.", ["F1"]))

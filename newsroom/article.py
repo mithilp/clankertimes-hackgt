@@ -34,6 +34,7 @@ CRIMINAL_LABEL = re.compile(
     r"|cover(?:ed)? up|illegal(?:ly)?|criminal(?:ly)?)\b", re.I)
 
 # The data is current through a date. Present-tense absolutes outrun it.
+QUOTED = re.compile(r'"[^"]*"|“[^”]*”')
 TIMELESS = re.compile(r"\b(?:as of today|as of now|currently|right now|to date|so far this year)\b", re.I)
 
 # Counts are known exactly, so vague quantifiers are a choice to be less accurate.
@@ -79,7 +80,7 @@ def _sentence_gates(where: str, text: str, cites: list) -> list[str]:
         problems.append(f"{where}: makes an agency or office the subject of a criminal verb "
                         f"(\"{match.group(0).strip()}\"). An office charges; it is not the accused. "
                         "Name the person charged, or rewrite.")
-    if match := TIMELESS.search(text):
+    if match := TIMELESS.search(QUOTED.sub(" ", text)):     # a source's own words, quoted, may say "currently"
         problems.append(f"{where}: \"{match.group(0)}\" says what is true now, but the data only runs through its "
                         "cutoff date. Remove that phrase. Date-scope the claim (\"as of the report dated ...\", "
                         "\"through June 2026\"). Never use: as of today, as of now, currently, right now, to date, "
