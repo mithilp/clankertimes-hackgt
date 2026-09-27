@@ -1092,12 +1092,14 @@ class Investigation:
     def revise(self, decision: dict, d: dict, sources: dict, result: dict) -> dict | None:
         notes = self._council_notes(result)
         rules = WRITE.split("Rules:", 1)[1].rsplit("Reply with JSON", 1)[0]
-        for attempt in range(2):
+        researched = False
+        for attempt in range(3):      # research for the council doesn't use up a writing attempt
             reply = self.ask(REVISE + "\nRules:" + rules, f"{self._writer_input(decision, sources)}\n\nCURRENT DRAFT:\n"
                              f"{council.render({'article': d, 'sources': sources}).split('SOURCES:')[0]}\n\nCOUNCIL:\n{notes}",
                              max_tokens=6000)
             asks = [r for r in reply.get("needs_research", []) if isinstance(r, dict) and str(r.get("statement", "")).strip()]
-            if asks and attempt == 0:
+            if asks and not researched:
+                researched = True
                 new = [self._add_sub({**r, "records_first": _strs(r.get("records")), "needed_for": "maximum",
                                       "priority": "high"}, origin="council") for r in asks[:2]]
                 if new := [s for s in new if s]:
@@ -1109,6 +1111,7 @@ class Investigation:
             problems = article.check(revised, sources)
             if not problems:
                 return revised
+            self.say(f"  revision failed its checks: {'; '.join(problems[:3])}")
             notes += "\n" + "\n".join(f"mechanical: {p}" for p in problems)
         return None
 
@@ -1396,3 +1399,50 @@ def _close_story(story_id: int, inv: Investigation, result: dict) -> None:
             if tri := c.get("triage"):
                 db.event(conn, "reporter", tri["decision"], tri["why"], story_id=story_id)
         db.event(conn, "reporter", final.get("status", "failed"), final.get("note") or "", story_id=story_id)
+
+
+def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "virality", "novelty"),
+                   desk=None, say=print) -> dict:
+    """Pick a held story back up at the council, from its saved result.json: revise the draft against the
+    council's last notes, review it again, and publish if approved. For drafts held because a revision
+    failed its checks, without redoing the scouting."""
+    from .signals import Signal
+    path = Path(path)
+    result = json.loads(path.read_text(encoding="utf-8"))
+    if not result.get("article") or not result.get("council"):
+        raise ValueError(f"{path} has no draft and council review to resume")
+    inv = Investigation(result["hypothesis"], budget=10, rounds=MAX_ROUNDS, desk=desk if desk is not None else get_desk(), say=say)
+    inv.frame, inv.plan, inv.sizing = result.get("frame") or {}, result.get("plan") or {}, result.get("sizing") or {}
+    inv.coverage = {"report": result.get("coverage") or {}, "findings": [], "trail": []}
+    inv.coverage_urls = {c["url"] for c in inv.coverage["report"].get("coverage", []) if c.get("url")}
+    inv.subs = [{k: v for k, v in s.items() if k != "status"} for s in result.get("sub_hypotheses", [])]
+    inv.signals = [Signal(**s) for s in result.get("signals", [])]
+    inv.leads, inv.rounds = result.get("leads", []), result.get("rounds", [])
+    inv.spinoffs, inv.declined, inv.memory = result.get("spinoffs", []), result.get("declined", []), []
+    inv.record_id = result.get("desk_id", "")
+    decision, sources = result["verdict"], result["article"]["sources"]
+    last = result["council"][-1]
+    say(f"resuming at the council: {result['article']['draft'].get('headline', '')}")
+    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"])
+    if revised is None:
+        final = {"status": "held", "note": "the revision still failed its checks"}
+        result.update(final=final)
+    else:
+        reviewed = inv.review(decision, revised, sources, judges)
+        result["council"] = result["council"] + reviewed["history"]
+        result["article"] = {"draft": reviewed["draft"], "sources": sources}
+        if reviewed["outcome"] == "approved":
+            out = article.publish(result["story_id"], reviewed["draft"], sources, config.load().published_dir,
+                                  site=inv.site_fields(decision, {**reviewed, "history": result["council"]}))
+            final = {"status": "published", "note": decision.get("why", ""), "article": str(out),
+                     "headline": reviewed["draft"].get("headline", "")}
+            say(f"published {out}")
+        elif reviewed["outcome"] == "spiked":
+            final = {"status": "spiked", "note": f"spiked after the council's review: {reviewed['why']}"}
+        else:
+            final = {"status": "held", "note": "the skeptic or the virality judge did not approve after revisions"}
+        result.update(inv.to_dict(), final=final)
+    result["checks"] = hard_checks(result)
+    _finish(path.parent, result["story_id"], inv, result)
+    say(f"FINAL: {result['final']['status']} | {result['final'].get('headline') or result['final'].get('note', '')}")
+    return result
