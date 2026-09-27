@@ -256,7 +256,8 @@ text stays exactly as the source wrote it.
 The headline is what makes someone read the story: say what happened and why it matters to a reader, in
 plain words (who failed, who paid, what went wrong, what regulators did or didn't do), in one grammatical
 sentence of no more than about 16 words. Don't lead the headline with a technical figure (a ratio, a
-docket number, a statute); the specific numbers go in the dek. Good: "A Philadelphia bank failed more than
+docket number, a statute), and use no jargon a general reader wouldn't know ("covenant", "leverage ratio",
+"arrears", "preemption"): say what it means instead. The specific numbers go in the dek. Good: "A Philadelphia bank failed more than
 two years after regulators ordered it to fix its capital". Bad: "Bank reported a 5.17 percent leverage
 ratio at the December 2024 deadline its consent order set at 9 percent".
 
@@ -476,6 +477,8 @@ sections, report codes, file names and internal labels unless the reader needs t
 ("a research agent", "another research agent"); never "scout 3" or "H2". Make the steps read as a sequence:
 "A research agent confirmed...", "Another research agent then found...". A hunch step starts "An agent had a
 hunch that".
+Keep each step under 45 words. Leave out steps about the mechanics of the reporting itself (duplicate links,
+which reporter wrote an article, company descriptions everyone knows): return "" for those research steps.
 Keep the records' own terms for legal actions ("consent order", "civil money penalty", "lawsuit"), with a few
 plain words of explanation if needed; never swap in a milder or different word ("warning" is not a consent
 order). Say only what each research agent confirmed: leave out what it couldn't find or verify. If a research
@@ -483,6 +486,14 @@ agent's step is mostly about what it couldn't find, return "" as its text and it
 
 Reply with JSON only: {"steps": [{"i": 0, "text": "..."}]}
 """
+
+
+def _ts(at) -> float:
+    from datetime import datetime
+    try:
+        return datetime.fromisoformat(_iso(at)).timestamp()
+    except ValueError:
+        return 0.0
 
 
 def whole_sentences(text: str, limit: int) -> str:
@@ -1223,7 +1234,12 @@ class Investigation:
 
         seen = [s for s in self.signals if getattr(s, "first_seen", "")]
         if seen:
-            first = min(seen, key=lambda s: _iso(s.first_seen))
+            # The signal this story grew from: the one that shares the most with the story as published, not
+            # just the earliest (a cluster of signals can start with a different company).
+            about = " ".join([decision.get("narrowed_hypothesis", ""), self.h.get("accountable_party", ""),
+                              str((reviewed.get("draft") or {}).get("headline", ""))]).lower()
+            words = {w for w in re.findall(r"[a-z][a-z-]{3,}", about)}
+            first = max(seen, key=lambda s: (sum(w in s.summary.lower() for w in words), -_ts(s.first_seen)))
             desk = next((DESKS[b] for b in getattr(first, "beats", []) or [] if b in DESKS), "The news desk")
             add(first.first_seen, desk, f"Noticed: {first.summary}")
         add(self.h.get("mclovin", {}).get("created") or getattr(self, "started_at", ""), "Hunch",
