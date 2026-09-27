@@ -1397,14 +1397,17 @@ class Investigation:
 
 
 def _draft(reply: dict, previous: dict | None = None) -> dict:
-    """The parts of a model's draft the newsroom keeps. A revision that drops the kicker or dek keeps the old ones."""
+    """The parts of a model's draft the newsroom keeps. A revision that leaves a field out, or writes it as null
+    to mean "unchanged", keeps the previous version."""
     previous = previous or {}
-    return {"kicker": str(reply.get("kicker") or previous.get("kicker") or "").strip(),
-            "headline": str(reply.get("headline") or "").strip(),
-            "dek": str(reply.get("dek") or previous.get("dek") or "").strip(),
-            **{k: str(reply.get(k) if reply.get(k) is not None else previous.get(k) or "").strip()
-               for k in ("found", "prior", "why_it_matters")},
-            "paragraphs": _clean_paragraphs(reply.get("paragraphs"))}
+
+    def field(name: str) -> str:
+        value = reply.get(name)
+        if value is None or str(value).strip().lower() in ("", "null", "none", "unchanged"):
+            value = previous.get(name) or ""
+        return str(value).strip()
+    return {**{k: field(k) for k in ("kicker", "headline", "dek", "found", "prior", "why_it_matters")},
+            "paragraphs": _clean_paragraphs(reply.get("paragraphs")) or previous.get("paragraphs") or []}
 
 
 def _clean_paragraphs(paragraphs) -> list:

@@ -692,3 +692,9 @@ def test_preflight_sends_scouts_for_what_the_council_will_demand_in_round_one(en
     added = [s for s in result["sub_hypotheses"] if s["origin"] == "preflight"]
     assert len(added) == 1 and added[0]["needed_for"] == "minimum" and added[0]["new"]
     assert any(x["statement"].startswith("NHTSA's file lists 115") for x in sent)      # scouted in round one
+
+
+def test_a_revision_that_writes_null_keeps_the_previous_headline():
+    prev = {"headline": "Old headline", "dek": "Old dek", "paragraphs": [[{"text": "A.", "cite": ["F1"]}]]}
+    d = reporter_agent._draft({"headline": "null", "dek": None, "paragraphs": [[{"text": "B.", "cite": ["F1"]}]]}, previous=prev)
+    assert d["headline"] == "Old headline" and d["dek"] == "Old dek" and d["paragraphs"][0][0]["text"] == "B."
