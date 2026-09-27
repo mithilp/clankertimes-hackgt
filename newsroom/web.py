@@ -118,7 +118,10 @@ def fetch_text(url: str) -> str:
     if urlparse(str(response.url)).hostname == "news.google.com":
         return ""        # still Google's redirect page, not the article: only the browser can follow it
     is_pdf = "pdf" in response.headers.get("content-type", "") or url.lower().endswith(".pdf")
-    text = (_pdf_text(response.content) if is_pdf else _html_text(response.text))[:MAX_TEXT]
+    if response.content[:4] == b"PK\x03\x04":          # a ZIP (or a Word file, which is one): read what's inside
+        text = _zip_text(response.content)[:MAX_TEXT]
+    else:
+        text = (_pdf_text(response.content) if is_pdf or response.content[:5] == b"%PDF-" else _html_text(response.text))[:MAX_TEXT]
     if text:
         with db.session() as conn:
             conn.execute("insert or replace into pages (url, fetched, text) values (?, ?, ?)", (url, db.now(), text))
@@ -202,6 +205,31 @@ def _html_text(html: str) -> str:
         tag.decompose()
     lines = (line.strip() for line in soup.get_text("\n").splitlines())
     return "\n".join(line for line in lines if line)
+
+
+def _zip_text(data: bytes) -> str:
+    """Text of a Word document, or of the PDFs, Word files and text files inside a ZIP."""
+    import zipfile
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return ""
+    names = archive.namelist()
+    if "word/document.xml" in names:                    # the file itself is a .docx: join each paragraph's runs
+        import html as html_lib
+        xml = archive.read("word/document.xml").decode("utf-8", "replace")
+        paragraphs = ("".join(re.findall(r"<w:t(?:\s[^>]*)?>([^<]*)</w:t>", p)) for p in xml.split("</w:p>"))
+        return "\n".join(html_lib.unescape(p).strip() for p in paragraphs if p.strip())
+    parts = []
+    for name in names[:20]:
+        low, raw = name.lower(), archive.read(name)
+        if low.endswith(".pdf"):
+            parts.append(f"[{name}]\n{_pdf_text(raw)}")
+        elif low.endswith(".docx"):
+            parts.append(f"[{name}]\n{_zip_text(raw)}")
+        elif low.endswith((".txt", ".htm", ".html", ".csv")):
+            parts.append(f"[{name}]\n{_html_text(raw.decode('utf-8', 'replace'))}")
+    return "\n\n".join(p for p in parts if p.strip())
 
 
 def _pdf_text(data: bytes) -> str:
