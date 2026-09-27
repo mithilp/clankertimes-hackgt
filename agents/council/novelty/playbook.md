@@ -28,7 +28,7 @@ At least one of these, and the story has to lead with it:
 ## Verdicts
 
 - **New:** approve, and name what's new so the headline can lead with it.
-- **Partly new:** revise — the new part should lead, and prior reporting should be credited by name.
+- **Partly new:** approve when the new part leads (it's in the headline or the first sentence) and prior reporting is credited by name. Revise only when the new part is buried or the credit is missing, and say exactly which. Almost every original story builds on something already public: that is not a reason to send it back.
 - **Not new:** send back with the prior coverage linked. The Reporter should either find the angle nobody has, or park it.
 
 Crediting prior reporting isn't a weakness. It's how a reader knows what's ours.

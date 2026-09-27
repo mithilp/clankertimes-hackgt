@@ -400,8 +400,18 @@ def test_a_draft_the_gates_never_approve_is_held_not_published(env, monkeypatch)
     monkeypatch.setattr(llm, "ask_json", FakeModel(skeptic={"verdict": "revise", "problems": [{"sentence": "headline", "issue": "x"}]}))
     fake_scouts(monkeypatch)
     result = run()
-    assert result["final"]["status"] == "held" and len(result["council"]) == reporter_agent.MAX_REVISIONS + 1
+    # Virality and novelty approve, so it gets the extra rounds; the skeptic still never does, so it is held.
+    assert result["final"]["status"] == "held"
+    assert len(result["council"]) == reporter_agent.MAX_REVISIONS + reporter_agent.EXTRA_REVISIONS + 1
     assert "article" in result and not list(Path("published").glob("*.md"))
+
+
+def test_a_draft_only_one_judge_likes_gets_no_extra_rounds(env, monkeypatch):
+    no = {"verdict": "revise", "problems": [{"sentence": "headline", "issue": "x"}]}
+    monkeypatch.setattr(llm, "ask_json", FakeModel(skeptic=no, virality=no))
+    fake_scouts(monkeypatch)
+    result = run()
+    assert result["final"]["status"] == "held" and len(result["council"]) == reporter_agent.MAX_REVISIONS + 1
 
 
 # --- the desk: memory and recording --------------------------------------------------------------
