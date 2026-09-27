@@ -77,11 +77,13 @@ DEFAULTS = {
     "revise": DRAFT,
     "skeptic": APPROVE, "virality": APPROVE, "novelty": APPROVE,
     "pivot": {"pivot": False, "why": "nothing a reader would care about"},
+    "preflight": {"must_have": [], "headline_test": ""},
 }
 
 STEPS = [("frame", "frame the story"), ("plan", "size the investigation"), ("direct", "direct the next round"),
          ("memo", "the verdict memo"), ("triage", "council sent your draft back"), ("revise", "revise the draft"),
-         ("write", "write the article"), ("pivot", "is there a different, true story")]
+         ("write", "write the article"), ("pivot", "is there a different, true story"),
+         ("preflight", "read this plan the way the council")]
 
 
 class FakeModel:
@@ -165,7 +167,7 @@ def test_a_supported_hypothesis_is_published_and_recorded_on_the_desk(env, monke
 
     result = run(desk=desk)
 
-    assert model.steps()[:5] == ["frame", "plan", "direct", "memo", "write"]
+    assert model.steps()[:6] == ["frame", "plan", "preflight", "direct", "memo", "write"]
     assert result["verdict"]["verdict"] == "write" and result["verdict"]["story"] == "maximum"
     assert result["final"]["status"] == "published" and result["checks"] == []
     assert "# Federal regulators are examining Model 3 steering" in Path(result["final"]["article"]).read_text(encoding="utf-8")
@@ -678,3 +680,15 @@ def test_timeline_text_is_cut_at_a_sentence_not_mid_word():
     cut = reporter_agent.whole_sentences(long, 100)
     assert cut == "The first sentence is short." 
     assert reporter_agent.whole_sentences("one two three four five six", 12).endswith("…")
+
+
+def test_preflight_sends_scouts_for_what_the_council_will_demand_in_round_one(env, monkeypatch):
+    ask = {"must_have": [{"statement": "NHTSA's file lists 115 loss-of-steering reports for the 2023 Model 3.",
+                          "records": ["NHTSA investigations file"], "novelty": "number", "why": "the number that tests it"}]}
+    sent = []
+    fake_scouts(monkeypatch, sent=sent)
+    monkeypatch.setattr(llm, "ask_json", FakeModel(preflight=ask))
+    result = run(write=False)
+    added = [s for s in result["sub_hypotheses"] if s["origin"] == "preflight"]
+    assert len(added) == 1 and added[0]["needed_for"] == "minimum" and added[0]["new"]
+    assert any(x["statement"].startswith("NHTSA's file lists 115") for x in sent)      # scouted in round one

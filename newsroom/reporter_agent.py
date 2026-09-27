@@ -474,6 +474,26 @@ Reply with JSON only: {"queries": ["...", "...", "..."]}
 """
 
 
+PREFLIGHT = """
+# Your job right now: read this plan the way the council will read the finished story
+
+Three judges must approve before anything publishes. The novelty judge asks: what does this establish that no
+outlet has published, and is that the lead? Its usual reason for sending a draft back is a missing specific
+figure or record: "the one number that would test this was never pulled" (the ratio a bank actually reported
+against the one it was ordered to reach, the amount a city actually wrote off, the date a deadline actually
+expires). The virality judge asks whether a reader would care and share it; the skeptic whether every claim
+is backed.
+
+Name up to two specific facts the plan does NOT already assign to a scout, that the judges would demand
+before approving the minimum story: a number from a named dataset or filing, or a quote from a named record.
+Each must be checkable from records online now. If the plan already covers them, return an empty list.
+
+Reply with JSON only:
+{"must_have": [{"statement": "a checkable statement", "records": ["the specific record or dataset"],
+  "novelty": "number|record|contradiction", "why": "why a judge would demand it"}],
+ "headline_test": "the headline this story could earn if the plan works, in plain words"}
+"""
+
 NARRATE = """You write the "How this story came together" timeline under a news article, for a general reader.
 Each numbered step below is one moment in the reporting, with who did it. Rewrite each step's text as one or two
 short, plain sentences a curious non-expert follows. Keep every fact, add none. Drop docket numbers, statute
@@ -697,6 +717,7 @@ class Investigation:
         self.say(f"  coverage scout: {cov.get('status', 'unknown')}; {len(found)} prior report(s)"
                  + (f"; already published: {', '.join(sorted(reported))}" if reported else "") + f". {cov.get('summary', '')}")
         self._plan()
+        self.preflight()
 
     def coverage_queries(self) -> list[str]:
         """Short searches for earlier reporting: the plan's, or three written for the purpose. Never the whole
@@ -720,6 +741,31 @@ class Investigation:
         return out
 
     # 2. plan and size
+    def preflight(self) -> None:
+        """Before any scout goes out, read the plan the way the council will read the finished story, and send
+        scouts in round one for the specific records and numbers the judges would demand. Stories used to spend
+        hours in revision fetching the one number the novelty judge kept asking for."""
+        plan = "\n".join(f"- {s['id']} [{s['needed_for']}{', NEW' if s['new'] else ''}] {s['statement']}"
+                          for s in self.subs if not s["dropped"])
+        cov = self.coverage.get("report", {}) if isinstance(self.coverage, dict) else {}
+        try:
+            reply = self.ask(PREFLIGHT, f"{brief(self.h)}\n\nMinimum story: {self.frame.get('minimum_story', '')}\n"
+                                        f"Maximum story: {self.frame.get('maximum_story', '')}\n"
+                                        f"Prior coverage: {json.dumps(cov.get('coverage', []), ensure_ascii=False)[:1500]}\n"
+                                        f"What nobody established: {cov.get('gap', '')}\n\nThe scouts' plan:\n{plan}",
+                             max_tokens=1500)
+        except Exception as e:  # noqa: BLE001 - the plan still stands without it
+            self.say(f"  preflight skipped: {type(e).__name__}")
+            return
+        added = [self._add_sub({**r, "records_first": _strs(r.get("records")), "needed_for": "minimum",
+                                "priority": "high", "new": True, "novelty": r.get("novelty") or "number"}, origin="preflight")
+                 for r in (reply.get("must_have") or [])[:2] if isinstance(r, dict) and str(r.get("statement", "")).strip()]
+        added = [a for a in added if a]
+        self.preflight_notes = str(reply.get("headline_test", ""))
+        if added:
+            self.say(f"  preflight: the council will want {len(added)} more fact(s) before it approves: "
+                     + "; ".join(a["statement"] for a in added))
+
     def _plan(self) -> None:
         cov = self.coverage.get("report", {}) if isinstance(self.coverage, dict) else {}
         listing = ("\n".join(f"- {c.get('outlet', '')} {c.get('date', '')} {c['url']}: {c.get('what_it_established', '')}"
@@ -851,7 +897,7 @@ class Investigation:
 
     def _add_sub(self, raw: dict, origin: str) -> dict | None:
         statement = str(raw.get("statement", "")).strip()
-        cap = MAX_SUBS + (COUNCIL_EXTRA_SUBS if origin == "council" else 0)   # the council's asks come last and matter most
+        cap = MAX_SUBS + (COUNCIL_EXTRA_SUBS if origin in ("council", "preflight") else 0)   # the council's asks come last and matter most
         if not statement or len(self.subs) >= cap:
             return None
         if any(statement.lower() == s["statement"].lower() for s in self.subs):
