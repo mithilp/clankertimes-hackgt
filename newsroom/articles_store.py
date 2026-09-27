@@ -35,6 +35,19 @@ def _ts(iso: str) -> datetime:
     return at if at.tzinfo else at.replace(tzinfo=timezone.utc)
 
 
+def pct(text: str) -> str:
+    """'5.17 percent' as '5.17%' in the newsroom's own words; quoted source text stays exactly as written."""
+    import re
+    from .article import IN_QUOTES
+    out, last = [], 0
+    for m in IN_QUOTES.finditer(text or ""):
+        out.append(re.sub(r"(\d[\d.,]*) percent\b", r"\1%", text[last:m.start()]))
+        out.append(m.group(0))
+        last = m.end()
+    out.append(re.sub(r"(\d[\d.,]*) percent\b", r"\1%", (text or "")[last:]))
+    return "".join(out)
+
+
 def to_document(slug: str, article: dict, sources: dict[str, dict], *, beats: list[str] | None = None,
                 published_at: str | None = None, timeline: list[dict] | None = None) -> dict:
     """timeline: how the story came together, oldest first, as [{at, who, text, result}], where who is the
@@ -43,10 +56,11 @@ def to_document(slug: str, article: dict, sources: dict[str, dict], *, beats: li
     """The site's article shape, from the pipeline's (headline, paragraphs of {text, cite}, sources)."""
     return {
         "slug": slug, "status": "published", "sample": False, "beats": beats or [],
-        "kicker": article.get("kicker", ""), "headline": article["headline"].strip(), "dek": article.get("dek", ""),
-        "found": article.get("found", ""), "prior": article.get("prior", ""), "why_it_matters": article.get("why_it_matters", ""),
+        "kicker": article.get("kicker", ""), "headline": pct(article["headline"].strip()), "dek": pct(article.get("dek", "")),
+        "found": pct(article.get("found", "")), "prior": pct(article.get("prior", "")),
+        "why_it_matters": pct(article.get("why_it_matters", "")),
         "published_at": published_at or datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "paragraphs": [[{"text": s["text"].strip(), "cite": list(s["cite"])} for s in p] for p in article["paragraphs"]],
+        "paragraphs": [[{"text": pct(s["text"].strip()), "cite": list(s["cite"])} for s in p] for p in article["paragraphs"]],
         "sources": {sid: {"kind": KIND.get(s.get("source_type", ""), s.get("source_type", "source")),
                           "title": s.get("title") or s.get("url", ""), "publisher": s.get("publisher", ""),
                           "url": s.get("url", ""), "accessed": s.get("accessed", ""),
