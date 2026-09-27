@@ -234,6 +234,45 @@ def nhtsa_sgo(operator: str = "", city: str = "", state: str = "", kind: str = "
     return out
 
 
+FDIC_API = "https://api.fdic.gov/banks"
+# Call Report fields, with what they mean. Ratios are percents; dollar amounts are in thousands.
+FDIC_FIELDS = {"ASSET": "total assets ($ thousands)", "DEP": "total deposits ($ thousands)",
+               "EQ": "total equity capital ($ thousands)", "NETINC": "net income, year to date ($ thousands)",
+               "RBC1AAJ": "tier 1 leverage ratio (%)", "RBCRWAJ": "total risk-based capital ratio (%)",
+               "NCLNLSR": "noncurrent loans as a share of loans (%)", "ROA": "return on assets (%)"}
+
+
+def fdic_bank(bank: str) -> list[dict]:
+    """A bank's FDIC record and its Call Report history: the institution (by FDIC certificate number or
+    name) and, quarter by quarter, assets, deposits, capital ratios and income, newest first."""
+    bank = bank.strip()
+    params = ({"filters": f"CERT:{bank}"} if bank.isdigit() else {"search": f"NAME:{bank}"})
+    found = httpx.get(f"{FDIC_API}/institutions", params={**params, "limit": 3,
+                      "fields": "NAME,CITY,STALP,ACTIVE,CERT,ENDEFYMD,ESTYMD,ASSET"}, timeout=30)
+    found.raise_for_status()
+    out = []
+    for inst in [d["data"] for d in found.json().get("data", [])][:2]:
+        cert = inst["CERT"]
+        fin = httpx.get(f"{FDIC_API}/financials", params={"filters": f"CERT:{cert}", "sort_by": "REPDTE",
+                        "sort_order": "DESC", "limit": 12, "fields": "REPDTE," + ",".join(FDIC_FIELDS)}, timeout=30)
+        fin.raise_for_status()
+        quarters = []
+        for q in (d["data"] for d in fin.json().get("data", [])):
+            rep = str(q.get("REPDTE", ""))
+            parts = [f"{label}: {q[k]:,.2f}" if isinstance(q.get(k), float) else f"{label}: {q.get(k)}"
+                     for k, label in FDIC_FIELDS.items() if q.get(k) is not None]
+            quarters.append(f"Quarter ending {rep[:4]}-{rep[4:6]}-{rep[6:]}: " + "; ".join(parts) + ".")
+        status = "active" if inst.get("ACTIVE") == 1 else f"inactive since {inst.get('ENDEFYMD', '?')}"
+        out.append({"url": f"https://banks.data.fdic.gov/bankfind-suite/bankfind/details/{cert}",
+                    "title": f"FDIC BankFind: {inst['NAME']} ({inst.get('CITY')}, {inst.get('STALP')}), cert {cert}",
+                    "text": _text(f"FDIC institution record: {inst['NAME']}, {inst.get('CITY')}, {inst.get('STALP')}, "
+                                  f"FDIC certificate {cert}, established {inst.get('ESTYMD')}, {status}. "
+                                  "Call Report financial data filed with the FDIC, newest quarter first:",
+                                  "\n".join(quarters)),
+                    "source_type": "government_record"})
+    return out
+
+
 # What an 8-K item number means: the items are how a company says what happened.
 EIGHT_K_ITEMS = {"1.01": "material agreement", "1.02": "agreement terminated", "1.03": "bankruptcy or receivership",
                  "1.05": "cybersecurity incident", "2.01": "acquisition or sale completed", "2.03": "new debt",

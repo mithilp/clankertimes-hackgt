@@ -49,6 +49,8 @@ TOOLS = {
     "court_dockets": ("company | problem words", "federal court dockets (CourtListener) naming the company and the problem"),
     "federal_register": ("exact phrase", "Federal Register rules, proposed rules, notices and orders containing the phrase"),
     "news_search": ("query", "Google News, newest first; add when:365d to reach back a year. Best for what outlets reported"),
+    "fdic_bank": ("bank name or FDIC cert number", "a bank's FDIC record and quarterly Call Report data: assets, deposits, "
+                  "capital ratios (tier 1 leverage, total risk-based), bad loans, income, e.g. 33802 or Tioga-Franklin"),
     "sec_filings": ("exact phrase | forms | since", "SEC EDGAR full-text search, newest first, e.g. \"going concern\" | 8-K | "
                     "2026-01-01. Forms: 8-K, 10-K, 10-Q, 4 (insider trades), S-1, DEF 14A, SC 13D. Blank forms = all"),
     "open": ("URL or result ref", "open a page the way a person browsing would: its title, opening text and its links, each "
@@ -180,6 +182,8 @@ class Scout:
             return self._read(arg)
         if tool == "open":
             return self._open(arg)
+        if tool == "fdic_bank":
+            return self._listing(self._official(records.fdic_bank(arg)), "FDIC bank records")
         if tool == "sec_filings":
             phrase, forms, since = _pipe(arg, 3)
             refs = [self._hit(r["url"], f"[SEC {r['form']} filed {r['date']}] {r['filer'][:100]}", "")
