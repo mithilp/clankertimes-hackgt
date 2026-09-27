@@ -1104,6 +1104,10 @@ class Investigation:
                 novel = [n for n in novel if n[0]["id"] in pivot["rests_on"]] or novel
         new_finding = ({"id": novel[0][0]["id"], "statement": novel[0][0]["statement"], "novelty": novel[0][0]["novelty"],
                         "url": novel[0][1]["url"], "quote": novel[0][1]["quote"]} if novel else None)
+        if pivot and new_finding:
+            # After a pivot, the story to lead with is the pivot itself, not whichever new sub-finding came first:
+            # drafts that led with a side finding drifted back to what other outlets had already reported.
+            new_finding["statement"] = pivot["hypothesis"]
         return {"verdict": v, "story": story, "why": why, "downgraded": downgraded, "new_finding": new_finding, "at": now(),
                 "memo": reply.get("memo") if isinstance(reply.get("memo"), dict) else {},
                 "narrowed_hypothesis": pivot["hypothesis"] if pivot else str(reply.get("narrowed_hypothesis") or "").strip(),
@@ -1155,7 +1159,8 @@ class Investigation:
                               f"{s['url']}\n{s['text'][:2000]}" for sid, s in sources.items())
         return (f"{brief(self.h)}\n\nVerdict: write the {decision['story']} story: {which}\n"
                 f"The hypothesis, narrowed to what the evidence supports: {decision.get('narrowed_hypothesis') or which}\n"
-                + (f"THE NEW FINDING (lead with it; no outlet has published it): {nf['statement']} - record: \"{nf['quote']}\" ({nf['url']})\n"
+                + (f"THE NEW FINDING (lead with it, in the headline and the first sentence, in every draft and every revision; "
+                   f"no outlet has published it): {nf['statement']} - record: \"{nf['quote']}\" ({nf['url']})\n"
                    if (nf := decision.get("new_finding")) else "")
                 + f"What prior coverage already reported (credit it by outlet): "
                   f"{json.dumps(self.coverage.get('report', {}).get('coverage', []), ensure_ascii=False)[:1500]}\n"
@@ -1602,6 +1607,8 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
     inv.spinoffs, inv.declined, inv.memory = result.get("spinoffs", []), result.get("declined", []), []
     inv.record_id = result.get("desk_id", "")
     decision = result["verdict"]
+    if decision.get("pivot") and decision.get("new_finding"):
+        decision["new_finding"]["statement"] = decision["pivot"]["hypothesis"]      # lead with the pivot's finding
     if fresh:
         # The reporting was done and the verdict was write, but no draft passed its checks: draft again.
         say(f"resuming at the draft: {decision.get('narrowed_hypothesis') or decision.get('why', '')[:150]}")
