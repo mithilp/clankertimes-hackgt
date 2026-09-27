@@ -316,6 +316,8 @@ def normalize(hypothesis: dict | str) -> dict:
     h["evidence_so_far"] = dict(h.get("evidence_so_far") or {})
     h["evidence_so_far"].setdefault("signal_ids", [])
     h["records"] = [{"id": f"M{n}", "record": r} for n, r in enumerate(h["would_settle_it"], 1)]
+    h["coverage_queries"] = [str(q) for q in h.get("coverage_queries") or [] if str(q).strip()]
+    h["known_coverage"] = [c for c in h.get("known_coverage") or [] if isinstance(c, dict) and str(c.get("url", "")).startswith("http")]
     return h
 
 
@@ -323,6 +325,10 @@ def brief(h: dict) -> str:
     lines = [f"Hypothesis (from McLovin): {h['hypothesis']}"]
     if h["why_now"]:
         lines.append(f"Why now: {h['why_now']}")
+    if h.get("why_interesting"):
+        lines.append(f"Why McLovin thinks it matters: {h['why_interesting']}")
+    if h.get("connection"):
+        lines.append(f"The connection McLovin drew: {h['connection']}")
     if h["accountable_party"]:
         lines.append(f"Accountable party: {h['accountable_party']}")
     if h["who_would_know"]:
@@ -632,6 +638,12 @@ class Investigation:
                                   "Not writing a story that may already be reported; it will be retried.")
         self.coverage_at = now()
         cov = self.coverage["report"]
+        # McLovin's own coverage check counts too: what it found published is published, so a record it
+        # found can't be this story's new finding.
+        have = {c.get("url") for c in cov.get("coverage", [])}
+        cov["coverage"] = cov.get("coverage", []) + [
+            {"url": c["url"], "outlet": web.host(c["url"]), "what_it_established": c.get("covers") or c.get("title", ""),
+             "from": "McLovin"} for c in self.h["known_coverage"] if c["url"] not in have]
         found = cov.get("coverage", [])
         self.coverage_urls = {c["url"] for c in found} | {f["url"] for f in self.coverage.get("findings", [])}
         reported = set(cov.get("reported_elements", []))
@@ -644,7 +656,8 @@ class Investigation:
     def coverage_queries(self) -> list[str]:
         """Short searches for earlier reporting: the plan's, or three written for the purpose. Never the whole
         hypothesis as one query, which news search answers with nothing."""
-        queries = [q for q in _strs(self.frame.get("coverage_searches")) if 0 < len(q.split()) <= 10][:3]
+        queries = [q for q in self.h.get("coverage_queries", []) + _strs(self.frame.get("coverage_searches"))
+                   if 0 < len(q.split()) <= 10][:3]
         if not queries:
             reply = self.ask(COVERAGE_QUERIES, brief(self.h), max_tokens=400)
             queries = [q for q in _strs(reply.get("queries")) if 0 < len(q.split()) <= 10][:3]

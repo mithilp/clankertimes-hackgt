@@ -10,11 +10,14 @@ counts land in llm_usage, so cost reporting keeps working.
 
 Three things that will waste your afternoon if you touch this:
   * --bare skips credential discovery, so every call comes back "Not logged in". Don't add it.
-  * stdin must be /dev/null or the CLI waits 3s for piped input on every call.
+  * the prompt goes on stdin and the system prompt in a file: Windows caps a command line at 32,767
+    characters, and a playbook plus its examples is longer than that.
   * the CLI reports its own failures inside the JSON envelope (is_error), not on stderr.
 """
 
 import hashlib
+import os
+import tempfile
 import json
 import subprocess
 import threading
@@ -53,19 +56,35 @@ def ask_json(system: str, user: str, *, model: str, max_tokens: int = 4000, thin
             return json.loads(_only_json(row["response"]))
 
     prompt = user + "\n\nReply with one JSON object and nothing else: no prose, no code fences."
+    # The system prompt goes in a file and the prompt on stdin, never on the command line: a reporter's
+    # playbook plus its examples is longer than Windows allows a command line to be (32,767 characters).
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", suffix=".md", delete=False) as f:
+        f.write(system)
+        system_file = f.name
     argv = [
         settings.claude_bin, "--print", "--output-format", "json",
         "--model", model,
-        "--system-prompt", system,
+        "--system-prompt-file", system_file,
         "--tools", "",                      # no file or bash tools: this is a plain completion
+        "--strict-mcp-config",              # and no MCP servers or claude.ai connectors (Gmail, Calendar...)
+        "--disable-slash-commands",         # nor skills: each call is one prompt in, one JSON reply out
         *(["--effort", "high"] if thinking and not model.startswith("claude-haiku") else []),
-        "--", prompt,
     ]
+    try:
+        return _run(argv, prompt, user, key, model)
+    finally:
+        os.unlink(system_file)
+
+
+def _run(argv: list[str], prompt: str, user: str, key: str, model: str) -> dict:
 
     last = ""
     for attempt in range(3):
         with _gate():
-            proc = subprocess.run(argv, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=900)
+            # UTF-8 explicitly: on Windows text=True decodes with the ANSI code page, which mangles curly
+            # quotes and dashes, and quotes are checked word for word against the pages they came from.
+            proc = subprocess.run(argv, input=prompt, capture_output=True, text=True, encoding="utf-8",
+                                  errors="replace", timeout=900)
         try:
             envelope = json.loads(proc.stdout or "{}")
         except json.JSONDecodeError:

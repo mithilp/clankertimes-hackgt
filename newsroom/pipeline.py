@@ -74,7 +74,15 @@ def from_mclovin(doc: dict) -> dict | None:
     if doc.get("kind") and doc["kind"] != "hypothesis":
         return None                     # McLovin's run logs and notes live in the same collection
     raw_id = doc.get("_id") or doc.get("id")
+    prior = doc.get("prior_coverage") if isinstance(doc.get("prior_coverage"), dict) else {}
+    connection = doc.get("connection")
     return {
+        # What McLovin already worked out: why it matters, the connection it drew, and the coverage it found.
+        "why_interesting": str(doc.get("why_interesting") or ""),
+        "connection": str(connection.get("text", "") if isinstance(connection, dict) else connection or ""),
+        "coverage_queries": _list(doc.get("coverage_queries") or prior.get("queries")),
+        "known_coverage": [{"url": c.get("url", ""), "title": c.get("title", ""), "covers": c.get("covers", "")}
+                           for c in prior.get("coverage") or [] if isinstance(c, dict) and c.get("url")],
         "id": f"mclov:{raw_id}" if raw_id else reporter_agent.hypothesis_id(text),
         "hypothesis": text.strip(),
         "why_now": str(_first(doc, ALIASES["why_now"]) or ""),
