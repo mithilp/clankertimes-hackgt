@@ -1355,13 +1355,18 @@ class Investigation:
             add(rounds[-1].get("at"), "Council", "The council of models and agents signed off on the article.", "approved")
             add(now(), "Published", "", "published")
         steps = sorted(steps, key=lambda x: x["at"])
-        return self.narrate(steps)
+        draft = reviewed.get("draft") or {}
+        article_text = " ".join(x.get("text", "") for p in draft.get("paragraphs") or [] for x in p)
+        return self.narrate(steps, article_text)
 
-    def narrate(self, steps: list[dict]) -> list[dict]:
+    def narrate(self, steps: list[dict], article: str = "") -> list[dict]:
         """Rewrite each step for a general reader. The facts stay; jargon, docket numbers and agent numbering go."""
         todo = [(i, s) for i, s in enumerate(steps) if s["text"] and s["who"] not in ("Council", "Published")]
         if todo:
             listing = "\n".join(f"{i}. [{s['who']}] {s['text']}" for i, s in todo)
+            if article:
+                listing += ("\n\nTHE PUBLISHED ARTICLE (the authority: no step may claim more than it does; where a step "
+                            f"overstates what the article says, say it the article's way):\n{article[:12000]}")
             try:
                 reply = llm.ask_json(NARRATE, listing, model=config.load().fast_model, max_tokens=3000)
                 for item in reply.get("steps", []) if isinstance(reply.get("steps"), list) else []:
