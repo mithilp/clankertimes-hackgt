@@ -29,7 +29,8 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 
 from . import config, llm, playbooks, records, web
-from .scout import COUNTS_AS_PROOF, read as read_page
+from .scout import COUNTS_AS_PROOF, MAX_PAGE_CHARS, read as read_page
+from .text import contains_quote
 
 MAX_CALLS_PER_STEP = 3
 UNAVAILABLE = "search unavailable right now"
@@ -58,9 +59,15 @@ TOOLS = {
              "(build its URL yourself), without a search engine. Then read the page you need"),
     "web_search": ("query", "general web search: short queries work best, site:agency.gov helps. Scarce and partly paid: "
                    "when you know which site holds the record, open it instead"),
-    "read": ("URL or result ref like R4", "read one page or record and pull the exact quotes that bear on your statement"),
+    "find": ("URL or result ref | words", "search INSIDE one long document (a bulk index or ZIP, a big PDF, a data table) for "
+             "the lines containing all the words, e.g. https://.../2025FD.zip | Castor. Returns those lines, with their "
+             "column labels. Use it on anything long before reading, to learn IDs, dates and which part to read"),
+    "read": ("URL or result ref like R4, optionally | focus words", "read one page or record and pull the exact quotes that "
+             "bear on your statement. On a long document add | words to read the parts around them, e.g. R4 | Spartz"),
 }
-COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "open", "read")
+COVERAGE_TOOLS = ("db_signals", "news_search", "web_search", "open", "find", "read")
+MAX_FIND_LINES = 25
+WINDOW = 1_500              # characters of context kept on each side of a focus word when reading a long document
 MAX_LINKS_SHOWN = 20
 
 STEP = """
@@ -180,6 +187,8 @@ class Scout:
         """Run one call. Returns a short text result for the trail."""
         if tool == "read":
             return self._read(arg)
+        if tool == "find":
+            return self._find(arg)
         if tool == "open":
             return self._open(arg)
         if tool == "fdic_bank":
@@ -296,23 +305,44 @@ class Scout:
                 + (f"{len(page['links'])} links, the {len(shown)} most relevant:\n      " + "\n      ".join(shown)
                    if shown else "no links (a document: read it)"))
 
+    def _find(self, arg: str) -> str:
+        target, _, words = arg.partition("|")
+        url, _ = self._resolve(target)
+        terms = [w.lower() for w in words.split() if w.strip()]
+        if not url.startswith("http") or not terms:
+            return f"can't find in {arg!r}: give a URL or result ref, then | and the words to look for"
+        text = web.fetch_text(url)
+        if not text:
+            return "couldn't fetch it (blocked, gone, or not text); try another source"
+        lines = [line.strip() for line in text.splitlines() if all(t in line.lower() for t in terms)]
+        self._hit(url, f"[searched inside] {web.host(url)}")
+        if not lines:
+            return f"no line in {len(text):,} characters contains all of: {' '.join(terms)}"
+        shown = "\n      ".join(line[:300] for line in lines[:MAX_FIND_LINES])
+        more = f" (showing {MAX_FIND_LINES})" if len(lines) > MAX_FIND_LINES else ""
+        return f"{len(lines)} matching line(s) in {len(text):,} characters{more}:\n      {shown}"
+
     def _read(self, arg: str) -> str:
-        url, hit = self._resolve(arg)
+        target, _, focus = arg.partition("|")
+        url, hit = self._resolve(target)
         if (routed := self._fdic_api(url)) is not None:
             return routed + "\n      (read the FDIC BankFind record above for quotes)"
         if not url.startswith("http"):
             return f"can't read {arg!r}: give a URL or a result ref"
-        if url in self.read_urls:
-            return "already read"
-        self.read_urls.add(url)
-        text = web.fetch_text(url)
-        if not text:
+        key = f"{url}|{focus.strip().lower()}"
+        if key in self.read_urls or (not focus.strip() and url in self.read_urls):
+            return "already read (add | focus words to read a different part)"
+        self.read_urls.update({key, url})
+        full = web.fetch_text(url)
+        if not full:
             return "couldn't fetch it (blocked, gone, or not text); try another source"
+        text = focused(full, focus)
         title = (hit or {}).get("title", "")
         for prefix in ("[official record] ", "[Federal Register] ", "[lead from the newsroom DB] ", "[signal] "):
             title = title.removeprefix(prefix)
         found = read_page(self._reading_statement(), url, title, text, source_type=self.known_type.get(url),
                           context=self.context)
+        found = [f for f in found if contains_quote(full, f["quote"])]   # checked against the whole page, too
         self.findings.extend(found)
         if not found:
             return "nothing on this page bears on the statement"
@@ -436,6 +466,37 @@ class Scout:
         if held != verdict:
             report["held_back"] = f"the scout said {verdict!r}, but no verified quote from a source that counts says so"
         return {"findings": self.findings, "trail": self.trail, "used": self.used, "report": report}
+
+
+def focused(text: str, focus: str, limit: int = MAX_PAGE_CHARS) -> str:
+    """What the reader sees of a page. A short page whole; a long one with focus words, the opening plus the
+    passages around each place the words appear, in page order, so the reader gets the part that matters
+    instead of only the first 30,000 characters. Every passage is verbatim, so quotes still check."""
+    terms = [t.lower() for t in focus.split() if len(t) > 1]
+    if len(text) <= limit or not terms:
+        return text[:limit]
+    low = text.lower()
+    spans = []
+    for t in terms:
+        start = 0
+        while (at := low.find(t, start)) >= 0 and len(spans) < 200:
+            spans.append((max(0, at - WINDOW), min(len(text), at + len(t) + WINDOW)))
+            start = at + len(t)
+    if not spans:
+        return text[:limit]
+    merged = [(0, min(2_000, len(text)))]
+    for a, b in sorted(spans):
+        if a <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    out, size = [], 0
+    for a, b in merged:
+        if size + (b - a) > limit:
+            break
+        out.append(text[a:b])
+        size += b - a
+    return "\n[...]\n".join(out)
 
 
 def held_to_evidence(verdict: str, findings: list[dict]) -> str:

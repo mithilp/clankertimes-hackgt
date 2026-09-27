@@ -15,6 +15,7 @@ from . import config, db
 
 BRAVE_URL = "https://api.search.brave.com/res/v1/web/search"
 MAX_TEXT = 200_000
+MAX_DATA_TEXT = 2_000_000   # bulk data (ZIP indexes, CSVs): scouts search inside these with `find`
 HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; newsroom-research/0.1)"}
 # SEC's fair-access policy: automated requests must declare who they are, or EDGAR answers 403. Its pages
 # are plain HTML, so they skip the browser.
@@ -22,8 +23,8 @@ SEC_HEADERS = {"User-Agent": "Clanker Times newsroom research https://clankertim
 
 
 def _plain_http(url: str) -> bool:
-    """Pages the browser can't or needn't open: PDFs start a download, and SEC wants a declared agent."""
-    return urlparse(url).path.lower().endswith(".pdf") or host(url).endswith("sec.gov")
+    """Pages the browser can't or needn't open: PDFs and ZIPs start a download, and SEC wants a declared agent."""
+    return urlparse(url).path.lower().endswith((".pdf", ".zip", ".csv", ".txt", ".xml")) or host(url).endswith("sec.gov")
 
 
 def _headers(url: str) -> dict:
@@ -98,8 +99,7 @@ def fetch_text(url: str) -> str:
         return ""
     if urlparse(str(response.url)).hostname == "news.google.com":
         return ""        # still Google's redirect page, not the article: only the browser can follow it
-    is_pdf = "pdf" in response.headers.get("content-type", "") or url.lower().endswith(".pdf")
-    text = (_pdf_text(response.content) if is_pdf else _html_text(response.text))[:MAX_TEXT]
+    text = _body_text(response, url)[:MAX_DATA_TEXT if _kind(response, url) in ("zip", "table") else MAX_TEXT]
     if text:
         with db.session() as conn:
             conn.execute("insert or replace into pages (url, fetched, text) values (?, ?, ?)", (url, db.now(), text))
@@ -127,8 +127,8 @@ def open_page(url: str) -> dict:
         except httpx.HTTPError:
             return {"url": url, "title": "", "text": "", "links": []}
         final = str(response.url)
-        if "pdf" in response.headers.get("content-type", "") or url.lower().endswith(".pdf"):
-            text = _pdf_text(response.content)[:MAX_TEXT]
+        if _kind(response, url) != "html":
+            text = _body_text(response, url)[:MAX_DATA_TEXT if _kind(response, url) in ("zip", "table") else MAX_TEXT]
             if text:
                 remember(url, text)
             return {"url": final, "title": "", "text": text, "links": []}
@@ -158,10 +158,109 @@ def host(url: str) -> str:
     return (urlparse(url).hostname or "").removeprefix("www.")
 
 
+def _kind(response, url: str) -> str:
+    ctype = response.headers.get("content-type", "").lower()
+    path = urlparse(str(response.url) or url).path.lower()
+    if "pdf" in ctype or path.endswith(".pdf"):
+        return "pdf"
+    if "zip" in ctype or path.endswith(".zip") or response.content[:4] == b"PK\x03\x04":
+        return "zip"
+    if path.endswith((".csv", ".tsv")) or "csv" in ctype:
+        return "table"
+    if path.endswith(".txt") and "\t" in response.text[:2000]:
+        return "table"
+    return "html"
+
+
+def _body_text(response, url: str) -> str:
+    """The readable text of a response: a PDF's text, a ZIP's text files, a CSV/TSV's labeled rows, or a page."""
+    kind = _kind(response, url)
+    if kind == "pdf":
+        return _pdf_text(response.content)
+    if kind == "zip":
+        return _zip_text(response.content)
+    if kind == "table":
+        return _delimited_text(response.text)
+    return _html_text(response.text)
+
+
+def _zip_text(data: bytes) -> str:
+    """The text files inside a ZIP (agencies publish bulk indexes this way, e.g. the House Clerk's yearly
+    financial-disclosure index), each under its own heading. Delimited files come back as labeled rows."""
+    import zipfile
+    try:
+        archive = zipfile.ZipFile(io.BytesIO(data))
+    except zipfile.BadZipFile:
+        return ""
+    parts, size = [], 0
+    names = {i.filename.lower() for i in archive.infolist()}
+    for info in archive.infolist():
+        name = info.filename
+        if info.is_dir() or not name.lower().endswith((".txt", ".csv", ".tsv", ".xml", ".json")):
+            continue
+        stem = name.lower().rsplit(".", 1)[0]
+        if name.lower().endswith(".xml") and ({f"{stem}.txt", f"{stem}.csv", f"{stem}.tsv"} & names):
+            continue                  # the same data again in XML (the House Clerk ships both)
+        raw = archive.read(info)[:MAX_DATA_TEXT]
+        text = raw.decode("utf-8", errors="replace") if b"\x00" not in raw[:1000] else raw.decode("utf-16", errors="replace")
+        if name.lower().endswith((".csv", ".tsv", ".txt")) and ("\t" in text[:2000] or name.lower().endswith(".csv")):
+            text = _delimited_text(text)
+        parts.append(f"== {name} ==\n{text}")
+        size += len(text)
+        if size >= MAX_DATA_TEXT:
+            break
+    return "\n\n".join(parts)
+
+
+def _delimited_text(text: str) -> str:
+    """CSV or tab-separated data as one line per row, every value labeled with its column name, so a quoted
+    row says what each number is ("FilingDate: 3/4/2025 | DocID: 20026481") instead of a bare string of values."""
+    import csv
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    delimiter = "\t" if lines[0].count("\t") >= max(1, lines[0].count(",")) else ","
+    rows = list(csv.reader(lines, delimiter=delimiter))
+    header = [h.strip() for h in rows[0]]
+    if not any(header) or len(rows) < 2:
+        return text
+    out = []
+    for row in rows[1:]:
+        cells = [f"{h}: {v.strip()}" for h, v in zip(header, row) if v.strip() and h]
+        if cells:
+            out.append(" | ".join(cells))
+    return "\n".join(out)
+
+
+def _table_rows(table) -> list[str]:
+    """An HTML table as one line per row. With a header row, each value is labeled with its column."""
+    rows = [[c.get_text(" ", strip=True) for c in tr.find_all(["th", "td"])] for tr in table.find_all("tr")]
+    rows = [r for r in rows if any(r)]
+    if not rows:
+        return []
+    first = table.find("tr")
+    has_header = bool(table.find("thead")) or (first is not None and first.find("th") is not None and not first.find("td"))
+    if not has_header or len(rows) < 2:
+        return [" | ".join(c for c in r if c) for r in rows]
+    header, out = rows[0], []
+    for r in rows[1:]:
+        if len(r) == len(header):
+            out.append(" | ".join(f"{h}: {v}" if h else v for h, v in zip(header, r) if v))
+        else:
+            out.append(" | ".join(c for c in r if c))
+    return out
+
+
 def _html_text(html: str) -> str:
     soup = BeautifulSoup(html, "html.parser")
     for tag in soup(["script", "style", "noscript", "nav", "footer", "header", "form", "svg"]):
         tag.decompose()
+    # Tables keep their structure: one line per row, values labeled with their column headers. Flattened to
+    # one cell per line, a row of numbers loses what the numbers are, and a draft built on it can't be checked.
+    for table in soup.find_all("table"):
+        if table.find("table"):
+            continue                      # layout tables that nest data tables: handle the inner ones
+        table.replace_with("\n" + "\n".join(_table_rows(table)) + "\n")
     lines = (line.strip() for line in soup.get_text("\n").splitlines())
     return "\n".join(line for line in lines if line)
 

@@ -45,6 +45,8 @@ READ_SYSTEM = """You check one hypothesis about a specific story against one web
 3. Copy up to 3 quotes that bear on the hypothesis, each exactly as written on the page (one or two sentences, word for word). For each, say whether it supports, contradicts, or is unclear about the hypothesis. A quote supports or contradicts only if it is about this story's product, company or employer; otherwise leave it out.
    Use "contradicts" only when the page shows the substance of the hypothesis is false. A wrong detail, such as a date that is off by a few days, is not a contradiction: mark it "supports" or "unclear" and explain in the note.
    A lawsuit or complaint only shows that someone alleged something: it supports a hypothesis that the allegation was made, not that the allegation is true.
+   Numbers from a table must keep their labels: quote the line that names what each number is (a row that reads "FilingDate: 3/4/2025 | DocID: 20026481", or a sentence that states the figure). A bare row of numbers with no labels proves nothing on its own: quote its header line as a separate quote, or leave it out.
+   A page shown in parts ("[...]" between them) is excerpts of a longer document: quote from within one part, never across a "[...]".
 
 Before anything else, write "page_problem": the specific problem the page is about, in a few words (for example "power steering assist circuit board failure" or "FSD software running red lights"), and "same_problem": whether that is the same problem as the hypothesis. If it isn't, the page is not relevant.
 

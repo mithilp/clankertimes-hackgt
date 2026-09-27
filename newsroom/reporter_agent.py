@@ -51,6 +51,8 @@ MAX_SOURCES = 30             # findings handed to the writer
 SCOUT_WORKERS = 4
 GATE_JUDGES = ("skeptic", "virality", "novelty")   # all must approve
 PRIMARY = {"government_record", "court_record"}      # a new finding must rest on a record, not on someone's reporting
+KILLS = PRIMARY                                       # and only a record can kill a story
+NOT_NEW_LIMIT = 2                                     # novelty rejections in a row before rewording stops being an option
 NOVELTY = ("record", "number", "connection", "contradiction", "time")
 PRIORITY_BUDGET = {"high": 1.5, "medium": 1.0, "low": 0.6}
 MIN_BUDGET = 3
@@ -418,10 +420,17 @@ def _verdict(subs: list[dict]) -> tuple[str, str, str]:
     if not live:
         return "park", "", "no sub-hypotheses left"
     minimum = [s for s in live if s["needed_for"] == "minimum"] or live
+    # Only a primary record (government or court) can kill: news coverage can be stale, about a different period,
+    # or a paraphrase of a partisan charge. Contradicted only by reporting, the story parks until a record settles it.
+    for s in minimum:
+        against = [f for f in proof(s["findings"], "contradicts") if f["source_type"] in KILLS]
+        if status(s["findings"]) == "contradicted" and against:
+            return "kill", "", f'{s["id"]} is contradicted by {against[0]["url"]}: "{against[0]["quote"]}"'
     for s in minimum:
         if status(s["findings"]) == "contradicted":
             against = proof(s["findings"], "contradicts")[0]
-            return "kill", "", f'{s["id"]} is contradicted by {against["url"]}: "{against["quote"]}"'
+            return "park", "", (f'{s["id"]} is contradicted only by news reporting ({against["url"]}), not by a '
+                                f"government or court record; a record would settle it")
     holds = {s["id"]: status(s["findings"]) in ("supported", "disputed") for s in live}
     if all(holds.values()):
         return "write", "maximum", "every sub-hypothesis is supported by a source that counts"
@@ -1089,7 +1098,12 @@ class Investigation:
                 return {"outcome": "approved", "draft": d, "history": history}
             if n == MAX_REVISIONS:
                 break
-            tri = self.triage(d, sources, result)
+            not_new = self._novelty_streak(history)
+            tri = self.triage(d, sources, result, not_new=not_new)
+            if not_new >= NOT_NEW_LIMIT and tri["decision"] == "fix" and not tri.get("research"):
+                tri = {**tri, "decision": "spike", "why": (
+                    f"the novelty judge found nothing new in {not_new} rounds running, and the reporter named no "
+                    f"record that could make it new; rewording can't. ({tri['why']})")}
             entry["triage"] = tri
             self.say(f"  reporter: {tri['decision']} ({tri['why']})")
             if tri["decision"] == "spike":
@@ -1108,11 +1122,27 @@ class Investigation:
             + (f" notes: {j['notes']}" if j["notes"] else "") for j in result["judges"])
         return notes + "".join(f"\nmechanical: {m}" for m in result["mechanical"])
 
-    def triage(self, d: dict, sources: dict, result: dict) -> dict:
+    @staticmethod
+    def _novelty_streak(history: list[dict]) -> int:
+        """Council rounds in a row, counting back from the latest, in which the novelty judge did not approve."""
+        n = 0
+        for entry in reversed(history):
+            if any(j["judge"] == "novelty" and j["verdict"] != "approve" for j in entry["review"]["judges"]):
+                n += 1
+            else:
+                break
+        return n
+
+    def triage(self, d: dict, sources: dict, result: dict, not_new: int = 0) -> dict:
         if result["mechanical"] and not result["judges"]:
             return {"decision": "fix", "why": "mechanical checks failed", "fixes": result["mechanical"][:3]}
+        warning = ("" if not_new < NOT_NEW_LIMIT else
+                   f"\n\nTHE NOVELTY JUDGE HAS NOW FOUND NOTHING NEW IN {not_new} ROUNDS RUNNING. Rewording, reordering "
+                   "and crediting cannot fix that. Either spike it, or put under \"research\" the specific record that "
+                   "would give this story a finding no outlet has published (often the story the judges point at). "
+                   "A \"fix\" with no research will be treated as a spike.")
         reply = self.ask(TRIAGE, f"{brief(self.h)}\n\nDRAFT:\n{council.render({'article': d, 'sources': sources}).split('SOURCES:')[0]}"
-                                 f"\nCOUNCIL:\n{self._council_notes(result)}", max_tokens=1500)
+                                 f"\nCOUNCIL:\n{self._council_notes(result)}{warning}", max_tokens=1500)
         decision = "spike" if reply.get("decision") == "spike" and str(reply.get("why", "")).strip() else "fix"
         research = [r for r in reply.get("research", []) or [] if isinstance(r, dict) and str(r.get("statement", "")).strip()]
         return {"decision": decision, "why": str(reply.get("why", "")), "fixes": _strs(reply.get("fixes")),
