@@ -132,3 +132,16 @@ def test_a_sentence_written_as_null_is_dropped_not_published():
     from newsroom.reporter_agent import _clean_paragraphs
     assert _clean_paragraphs([[{"text": "Real.", "cite": ["F1"]}, {"text": "null", "cite": []}], [{"text": None}]]) == \
         [[{"text": "Real.", "cite": ["F1"]}]]
+
+
+def test_bracketed_changes_inside_a_quote_still_verify():
+    from newsroom.text import contains_quote
+    src = "While standard property taxes in Georgia are calculated based on 40% of a property's fair market value, this formula uses 25%."
+    assert contains_quote(src, "[w]hile standard property taxes in Georgia are calculated based on 40% of a property's fair market value")
+    assert not contains_quote(src, "[w]hile standard property taxes in Georgia are calculated based on 50%")
+
+
+def test_null_inside_real_text_is_not_leakage():
+    from newsroom.article import _leakage
+    assert not _leakage({"headline": "h", "paragraphs": [[{"text": 'The MOU says any breach is "null and void."'}]]})
+    assert _leakage({"headline": "h", "paragraphs": [[{"text": "null"}]]})

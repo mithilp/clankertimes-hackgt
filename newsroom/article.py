@@ -15,7 +15,7 @@ QUOTED = re.compile(r'["“]([^"”]{10,})["”]')
 # Text that means the pipeline leaked into the copy. Gannett printed "[[WINNING_TEAM_MASCOT]]",
 # and in 2026 the Telegraph, Bristol Live and Marie Claire each shipped a prompt or an AI note.
 LEAKAGE = re.compile(
-    r"\[\[[^\]]+\]\]|\{\{|\bTODO\b|\bundefined\b|\bnull\b|```"
+    r"\[\[[^\]]+\]\]|\{\{|\bTODO\b|^\s*(?:undefined|null|none)\s*$|```"
     r"|as an AI|I cannot|I\'m sorry|here(?:\'s| is) the (?:JSON|article|revised)|^certainly[,!]",
     re.I | re.M,
 )
