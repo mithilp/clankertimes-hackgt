@@ -364,7 +364,9 @@ def signals_for(h: dict, store=None) -> tuple[list, list[dict]]:
             url = str(src.get("url", ""))
             if url.startswith("http") and url not in urls:
                 urls.add(url)
-                leads.append({"url": url, "title": s.summary[:120], "description": s.checkable_claim})
+                # The page's own title, not the signal's summary: a lead's title becomes its source title.
+                leads.append({"url": url, "title": str(src.get("title") or "").strip() or web.host(url),
+                              "description": f"{s.summary[:120]}: {s.checkable_claim}"})
     return found, leads
 
 
@@ -1028,7 +1030,8 @@ class Investigation:
 
     @staticmethod
     def _source(f: dict) -> dict:
-        return {"title": f.get("title") or web.host(f["url"]), "url": f["url"], "text": f["quote"],
+        title = re.sub(r"^\[link on [^\]]*\]\s*", "", str(f.get("title") or "")).strip()
+        return {"title": title or web.host(f["url"]), "url": f["url"], "text": f["quote"],
                 "quote": f["quote"], "source_type": f["source_type"], "finding": f["finding"]}
 
     def _writer_input(self, decision: dict, sources: dict) -> str:
