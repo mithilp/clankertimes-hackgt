@@ -1,7 +1,8 @@
 import Link from "next/link";
 import { Fragment, type CSSProperties } from "react";
 import Sample from "@/components/Sample";
-import { BEAT_NAMES, SECTIONS, formatDate, listArticles, readingMinutes, sourceOrder, type Article } from "@/lib/articles";
+import { BEAT_NAMES, SECTIONS, formatDate, listArticles, readingMinutes, type Article } from "@/lib/articles";
+import { citedSites } from "@/lib/sources";
 import { firstSentence, smart } from "@/lib/text";
 
 export const revalidate = 60;
@@ -59,7 +60,7 @@ export default async function FrontPage() {
           <h2><Link href={`/article/${lead.slug}`}>{smart(lead.headline)}</Link></h2>
           <Dek article={lead} lines={3} />
           <Why article={lead} />
-          <span className="meta">{readingMinutes(lead)} min read · {sourceOrder(lead).length} sources</span>
+          <span className="meta">{readingMinutes(lead)} min read · {citedSites(lead).sites.length} sources</span>
           {lead.sample && <Sample />}
         </article>
         <div className="side">

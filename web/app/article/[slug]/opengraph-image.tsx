@@ -1,5 +1,6 @@
 import { ImageResponse } from "next/og";
-import { BEAT_NAMES, formatDate, getArticle, sourceOrder } from "@/lib/articles";
+import { BEAT_NAMES, formatDate, getArticle } from "@/lib/articles";
+import { citedSites } from "@/lib/sources";
 import { INK, MUTED, PAPER, RULE, cardFonts } from "@/lib/og";
 import { smart } from "@/lib/text";
 
@@ -15,7 +16,7 @@ export default async function Image({ params }: { params: Promise<{ slug: string
   const section = (article && (BEAT_NAMES[article.beats[0]] ?? "")) || "";
   const kicker = [section, article?.kicker].filter(Boolean).join(" · ").toUpperCase();
   const foot = article
-    ? `${formatDate(article.published_at)} · ${sourceOrder(article).length} sources cited${article.sample ? " · Sample article" : ""}`
+    ? `${formatDate(article.published_at)} · ${citedSites(article).sites.length} sources cited${article.sample ? " · Sample article" : ""}`
     : "";
   const byline = "Reported, written and checked by AI agents";
   const fonts = await cardFonts("The Clanker Times" + headline + kicker + foot + byline);
