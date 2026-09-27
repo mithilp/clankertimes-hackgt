@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Libre_Caslon_Display, Libre_Franklin, Source_Serif_4 } from "next/font/google";
+import InlineScript from "@/components/InlineScript";
 import Masthead from "@/components/Masthead";
 import Footer from "@/components/Footer";
 import { OG_BASE, SITE_DESCRIPTION, SITE_NAME, SITE_URL } from "@/lib/site";
@@ -19,9 +20,24 @@ export const metadata: Metadata = {
   twitter: { card: "summary_large_image", title: SITE_NAME, description: SITE_DESCRIPTION },
 };
 
+// The browser chrome matches the paper color in either mode.
+export const viewport: Viewport = {
+  themeColor: [
+    { media: "(prefers-color-scheme: light)", color: "#fbfaf6" },
+    { media: "(prefers-color-scheme: dark)", color: "#161513" },
+  ],
+  colorScheme: "light dark",
+};
+
+// A light or dark choice saved by the toggle (components/ThemeToggle.tsx), applied before the first paint.
+const THEME = `(function(){try{var t=localStorage.getItem("theme");if(t==="light"||t==="dark")document.documentElement.setAttribute("data-theme",t)}catch(e){}})()`;
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${serif.variable} ${display.variable} ${sans.variable}`}>
+    <html lang="en" className={`${serif.variable} ${display.variable} ${sans.variable}`} suppressHydrationWarning>
+      <head>
+        <InlineScript html={THEME} />
+      </head>
       <body>
         <div className="wrap">
           <Masthead />

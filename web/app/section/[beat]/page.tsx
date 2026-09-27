@@ -1,7 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
+import type { CSSProperties } from "react";
 import { SECTIONS, formatDate, listArticles } from "@/lib/articles";
 import { OG_BASE, SITE_CARD } from "@/lib/site";
+import { firstSentence, smart } from "@/lib/text";
 
 export const revalidate = 60;
 
@@ -42,8 +44,8 @@ export default async function Section({ params }: PageProps<"/section/[beat]">) 
             <article key={a.slug}>
               <span className="meta">{formatDate(a.published_at)}</span>
               <div>
-                <h2><Link href={`/article/${a.slug}`}>{a.headline}</Link></h2>
-                {a.dek && <p className="dek">{a.dek}</p>}
+                <h2><Link href={`/article/${a.slug}`}>{smart(a.headline)}</Link></h2>
+                {a.dek && <p className="dek clamp" style={{ "--lines": 2 } as CSSProperties}>{smart(firstSentence(a.dek))}</p>}
                 {a.sample && <p className="meta" style={{ marginTop: 6 }}>Sample article</p>}
               </div>
             </article>

@@ -1,9 +1,40 @@
 import Link from "next/link";
+import { Fragment, type CSSProperties } from "react";
 import Sample from "@/components/Sample";
-import { BEAT_NAMES, listArticles, readingMinutes } from "@/lib/articles";
-import { smart } from "@/lib/text";
+import { BEAT_NAMES, SECTIONS, formatDate, listArticles, readingMinutes, sourceOrder, type Article } from "@/lib/articles";
+import { firstSentence, smart } from "@/lib/text";
 
 export const revalidate = 60;
+
+const SIDE = 4;   // stories beside the lead; the rest go under "More stories"
+
+const kicker = (a: Article) => a.kicker || BEAT_NAMES[a.beats[0]];
+
+// Summaries on the front page are the first sentence, cut to a few lines; the article has the rest.
+function Dek({ article, lines }: { article: Article; lines: number }) {
+  if (!article.dek) return null;
+  return <p className="dek clamp" style={{ "--lines": lines } as CSSProperties}>{smart(firstSentence(article.dek))}</p>;
+}
+
+function Why({ article }: { article: Article }) {
+  if (!article.why_it_matters) return null;
+  return (
+    <p className="why clamp" style={{ "--lines": 3 } as CSSProperties}>
+      <span className="label">Why it matters</span> {smart(article.why_it_matters)}
+    </p>
+  );
+}
+
+// "Atlanta, Georgia Tech, … and Technology", each linking to its section, so the list never falls behind the menu.
+function Beats() {
+  const beats = Object.entries(SECTIONS);
+  return beats.map(([beat, name], i) => (
+    <Fragment key={beat}>
+      {i > 0 && (i === beats.length - 1 ? " and " : ", ")}
+      <Link href={`/section/${beat}`}>{name}</Link>
+    </Fragment>
+  ));
+}
 
 export default async function FrontPage() {
   const articles = await listArticles();
@@ -18,30 +49,49 @@ export default async function FrontPage() {
     );
   }
 
-  const opening = smart(lead.paragraphs[0]?.map((s) => s.text).join(" ") ?? "");
+  const side = rest.slice(0, SIDE);
+  const more = rest.slice(SIDE);
   return (
     <>
       <div className="front">
         <article className="lead story">
-          <span className="kicker label">{lead.kicker || BEAT_NAMES[lead.beats[0]]}</span>
+          <span className="kicker label">{kicker(lead)}</span>
           <h2><Link href={`/article/${lead.slug}`}>{smart(lead.headline)}</Link></h2>
-          {lead.dek && <p className="dek">{smart(lead.dek)}</p>}
-          {lead.why_it_matters && <p className="why"><span className="label">Why it matters</span> {smart(lead.why_it_matters)}</p>}
-          {opening && <p className="opening">{opening}</p>}
-          <span className="meta">{readingMinutes(lead)} min read · {Object.keys(lead.sources).length} sources</span>
+          <Dek article={lead} lines={3} />
+          <Why article={lead} />
+          <span className="meta">{readingMinutes(lead)} min read · {sourceOrder(lead).length} sources</span>
           {lead.sample && <Sample />}
         </article>
         <div className="side">
-          {rest.slice(0, 4).map((a) => (
+          {side.map((a) => (
             <article key={a.slug} className="story">
-              <span className="kicker label">{a.kicker || BEAT_NAMES[a.beats[0]]}</span>
+              <span className="kicker label">{kicker(a)}</span>
               <h2><Link href={`/article/${a.slug}`}>{smart(a.headline)}</Link></h2>
-              {a.dek && <p className="dek">{smart(a.dek)}</p>}
-              {a.why_it_matters && <p className="why"><span className="label">Why it matters</span> {smart(a.why_it_matters)}</p>}
+              <Dek article={a} lines={3} />
+              <Why article={a} />
               <span className="meta">{readingMinutes(a)} min read{a.sample ? " · Sample" : ""}</span>
             </article>
           ))}
         </div>
+        {/* Under the lead on wide screens, after the side stories on phones: see .front in globals.css. */}
+        {more.length > 0 && (
+          <section className="more" aria-labelledby="more-stories">
+            <h3 id="more-stories">More stories</h3>
+            <div className="list">
+              {more.map((a) => (
+                <article key={a.slug}>
+                  <span className="meta">{formatDate(a.published_at)}</span>
+                  <div>
+                    <span className="kicker label">{kicker(a)}</span>
+                    <h2><Link href={`/article/${a.slug}`}>{smart(a.headline)}</Link></h2>
+                    <Dek article={a} lines={2} />
+                    {a.sample && <p className="meta" style={{ marginTop: 6 }}>Sample article</p>}
+                  </div>
+                </article>
+              ))}
+            </div>
+          </section>
+        )}
       </div>
 
       <section className="band" aria-labelledby="desks">
@@ -50,7 +100,7 @@ export default async function FrontPage() {
           <div>
             <span className="label">1 · Watch</span>
             <h4>The beat desks</h4>
-            <p>Agents watch Atlanta, Georgia Tech, technology and national politics around the clock, and log anything that is moving and has someone accountable behind it.</p>
+            <p>Agents watch <Beats /> around the clock, and log anything that is moving and has someone accountable behind it.</p>
           </div>
           <div>
             <span className="label">2 · Suspect</span>
@@ -60,7 +110,7 @@ export default async function FrontPage() {
           <div>
             <span className="label">3 · Report</span>
             <h4>The reporter</h4>
-            <p>A reporter agent splits each claim into parts and sends scouts to find the records. A claim the records contradict is dropped.</p>
+            <p>A reporter agent splits each claim into parts and sends research agents to find the records. A claim the records contradict is dropped.</p>
           </div>
           <div>
             <span className="label">4 · Challenge</span>
