@@ -45,7 +45,7 @@ from .mclovin import hypothesis_id
 
 MAX_SUBS = 8                 # sub-hypotheses one story may carry, counting ones granted along the way
 MAX_ROUNDS = 3               # scout rounds before the reporter must decide
-COUNCIL_EXTRA_SUBS = 4       # scouts the council can still ask for once the plan is full
+COUNCIL_EXTRA_SUBS = 8       # scouts the council can still ask for once the plan is full
 EXTRA_REVISIONS = 2          # more rounds, one at a time, while two of three judges approve
 MAX_REVISIONS = 2            # council rounds after the first draft
 MAX_SOURCES = 30             # findings handed to the writer
