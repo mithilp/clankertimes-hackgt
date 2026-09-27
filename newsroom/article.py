@@ -79,9 +79,11 @@ def _sentence_gates(where: str, text: str, cites: list) -> list[str]:
         problems.append(f"{where}: makes an agency or office the subject of a criminal verb "
                         f"(\"{match.group(0).strip()}\"). An office charges; it is not the accused. "
                         "Name the person charged, or rewrite.")
-    if TIMELESS.search(text):
-        problems.append(f"{where}: says what is true now, but the data only runs through its cutoff date. "
-                        "Date-scope the claim instead.")
+    if match := TIMELESS.search(text):
+        problems.append(f"{where}: \"{match.group(0)}\" says what is true now, but the data only runs through its "
+                        "cutoff date. Remove that phrase and date-scope the claim (\"as of the report dated ...\", "
+                        "\"through June 2026\"). Never use: as of today, as of now, currently, right now, to date, "
+                        "so far this year.")
     # Complaint data ("D") is the allegation itself; it cannot establish a crime or a count-free adjective.
     if cites and set(map(str, cites)) == {"D"}:
         if match := CRIMINAL_LABEL.search(text):
