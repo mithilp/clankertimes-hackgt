@@ -1,4 +1,4 @@
-# Atlanta wrote off $35.1 million in water debt by council vote, its first legislative write-off since 2019, while its own auditor and water department disagree by $50 million on what is owed
+# Atlanta wrote off $61 million in unpaid water bills, and the debt still grew by $39 million
 
 *Published September 27, 2026. Every sentence links to its sources, listed below.*
 

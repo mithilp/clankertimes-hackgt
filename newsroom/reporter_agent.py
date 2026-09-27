@@ -496,6 +496,17 @@ Reply with JSON only:
  "headline_test": "the headline this story could earn if the plan works, in plain words"}
 """
 
+SITE_SECTIONS = ("atlanta", "georgia-tech", "us-politics", "markets", "banking", "public-money", "tech",
+                 "ai-industry", "higher-ed", "product-safety")
+SECTIONS_PROMPT = """Pick the sections of a news site this story belongs in, most fitting first, one to three of:
+atlanta (Atlanta city and metro Atlanta governments), georgia-tech (Georgia Tech, its students, athletics and
+money), us-politics (federal and state politics), markets (public companies and their filings), banking (banks,
+lenders, bank regulators), public-money (taxes, tax breaks, bonds, budgets, public contracts anywhere), tech
+(technology companies, data centers, AI infrastructure), ai-industry (AI companies), higher-ed (colleges other
+than Georgia Tech), product-safety (recalls and product defects). Only use atlanta for stories in metro Atlanta.
+The newsroom's beat for its first lead was: {hint}.
+Reply with JSON only: {{"sections": ["..."]}}"""
+
 NARRATE = """You write the "How this story came together" timeline under a news article, for a general reader.
 Each numbered step below is one moment in the reporting, with who did it. Rewrite each step's text as one or two
 short, plain sentences a curious non-expert follows. Keep every fact, add none. Drop docket numbers, statute
@@ -1287,8 +1298,21 @@ class Investigation:
 
     def site_fields(self, decision: dict, reviewed: dict) -> dict:
         """What the website needs beside the article: the beats it belongs to, and how it came together."""
-        beats = sorted({b for s in self.signals for b in getattr(s, "beats", []) or []})
-        return {"beats": beats, "timeline": self.timeline(decision, reviewed)}
+        hinted = sorted({b for s in self.signals for b in getattr(s, "beats", []) or []})
+        return {"beats": self.sections(reviewed.get("draft") or {}, hinted), "timeline": self.timeline(decision, reviewed)}
+
+    def sections(self, draft: dict, hinted: list[str]) -> list[str]:
+        """The site sections a published story belongs in, most fitting first, judged from the story itself.
+        The signals' beats are only a hint: a story can drift a long way from where its lead came from, and a
+        story queued by hand has no signals at all."""
+        text = f"{draft.get('headline', '')}\n{draft.get('dek', '')}\n{draft.get('found', '')}"
+        try:
+            reply = llm.ask_json(SECTIONS_PROMPT.format(hint=", ".join(hinted) or "(none)"), text,
+                                 model=config.load().fast_model, max_tokens=300)
+            picked = [b for b in _strs(reply.get("sections")) if b in SITE_SECTIONS][:3]
+        except Exception:  # noqa: BLE001 - fall back to the signals' beats
+            picked = []
+        return picked or [b for b in hinted if b in SITE_SECTIONS] or hinted
 
     def timeline(self, decision: dict, reviewed: dict) -> list[dict]:
         """How the story came together, for the site, oldest first, in plain words a reader follows: what the
