@@ -45,6 +45,7 @@ from .mclovin import hypothesis_id
 
 MAX_SUBS = 8                 # sub-hypotheses one story may carry, counting ones granted along the way
 MAX_ROUNDS = 3               # scout rounds before the reporter must decide
+COUNCIL_EXTRA_SUBS = 4       # scouts the council can still ask for once the plan is full
 MAX_REVISIONS = 2            # council rounds after the first draft
 MAX_SOURCES = 30             # findings handed to the writer
 SCOUT_WORKERS = 4
@@ -793,7 +794,8 @@ class Investigation:
 
     def _add_sub(self, raw: dict, origin: str) -> dict | None:
         statement = str(raw.get("statement", "")).strip()
-        if not statement or len(self.subs) >= MAX_SUBS:
+        cap = MAX_SUBS + (COUNCIL_EXTRA_SUBS if origin == "council" else 0)   # the council's asks come last and matter most
+        if not statement or len(self.subs) >= cap:
             return None
         if any(statement.lower() == s["statement"].lower() for s in self.subs):
             return None
@@ -1109,6 +1111,7 @@ class Investigation:
                               "priority": "high"}, origin="council") for r in asks[:2]]
         new = [sub for sub in new if sub]
         if not new:
+            self.say(f"  couldn't send scouts for the council ({len(self.subs)} sub-hypotheses already, or asked before)")
             return False
         self.say(f"  reporter sends {len(new)} scout(s) for the council: " + "; ".join(sub["statement"] for sub in new))
         self.dispatch(new)
