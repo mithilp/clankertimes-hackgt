@@ -281,8 +281,9 @@ overstating the evidence: the skeptic outranks virality. You may cut sentences. 
 source supports.
 
 If a problem can only be fixed with a fact you don't have, list it under "needs_research" as a plain
-statement a scout could check, with the records to try. Otherwise leave that list empty and cut or soften
-the claim.
+statement a scout could check, with the records to try. When a judge names a specific public number or
+record the story needs (a filed figure, a dataset value, a document's text), ask for it here: don't soften
+the story to avoid it. Otherwise leave that list empty and cut or soften the claim.
 
 The writing rules below still apply.
 
@@ -1073,7 +1074,7 @@ class Investigation:
             self.say(f"  reporter: {tri['decision']} ({tri['why']})")
             if tri["decision"] == "spike":
                 return {"outcome": "spiked", "draft": d, "history": history, "why": tri["why"]}
-            revised = self.revise(decision, d, sources, result)
+            revised = self.revise(decision, d, sources, result, plan=tri)
             if revised is None:
                 break
             d = revised
@@ -1094,8 +1095,11 @@ class Investigation:
         decision = "spike" if reply.get("decision") == "spike" and str(reply.get("why", "")).strip() else "fix"
         return {"decision": decision, "why": str(reply.get("why", "")), "fixes": _strs(reply.get("fixes"))}
 
-    def revise(self, decision: dict, d: dict, sources: dict, result: dict) -> dict | None:
+    def revise(self, decision: dict, d: dict, sources: dict, result: dict, plan: dict | None = None) -> dict | None:
         notes = self._council_notes(result)
+        if plan and (plan.get("why") or plan.get("fixes")):
+            notes += (f"\n\nYOUR OWN PLAN FOR THIS REVISION: {plan.get('why', '')}"
+                      + "".join(f"\n- {f}" for f in plan.get("fixes", [])))
         rules = WRITE.split("Rules:", 1)[1].rsplit("Reply with JSON", 1)[0]
         researched = False
         for attempt in range(3):      # research for the council doesn't use up a writing attempt
@@ -1428,7 +1432,7 @@ def resume_council(path: str | Path, *, judges: tuple[str, ...] = ("skeptic", "v
     decision, sources = result["verdict"], result["article"]["sources"]
     last = result["council"][-1]
     say(f"resuming at the council: {result['article']['draft'].get('headline', '')}")
-    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"])
+    revised = inv.revise(decision, result["article"]["draft"], sources, last["review"], plan=last.get("triage"))
     if revised is None:
         final = {"status": "held", "note": "the revision still failed its checks"}
         result.update(final=final)
