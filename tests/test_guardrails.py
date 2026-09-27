@@ -105,3 +105,9 @@ def test_a_quoted_source_may_say_currently():
     assert not any("says what is true now" in p for p in _sentence_gates(
         "p1", 'The university said the program "has 82 students currently enrolled."', ["F1"]))
     assert any("says what is true now" in p for p in _sentence_gates("p1", "The program currently has 82 students.", ["F1"]))
+
+
+def test_short_scare_quotes_are_not_checked_but_real_quotes_are():
+    from newsroom.article import QUOTED
+    assert QUOTED.findall('the "other" programs') == []
+    assert QUOTED.findall('it said "82 students are enrolled" there') == ["82 students are enrolled"]
