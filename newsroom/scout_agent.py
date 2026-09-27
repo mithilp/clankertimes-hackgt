@@ -263,8 +263,16 @@ class Scout:
         hit = self.hits.get(ref) or (self.hits.get(self.by_url[arg.strip()]) if arg.strip() in self.by_url else None)
         return (hit["url"] if hit else arg.strip()), hit
 
+    def _fdic_api(self, url: str) -> str | None:
+        """FDIC's raw API answers in field codes nobody can quote; send it through fdic_bank instead."""
+        if web.host(url) in ("api.fdic.gov", "banks.data.fdic.gov") and (m := re.search(r"CERT(?::|%3A|=)(\d+)", url, re.I)):
+            return self.call("fdic_bank", m.group(1))
+        return None
+
     def _open(self, arg: str) -> str:
         url, _ = self._resolve(arg)
+        if (routed := self._fdic_api(url)) is not None:
+            return routed
         if not url.startswith("http"):
             return f"can't open {arg!r}: give a URL or a result ref"
         page = web.open_page(url)
@@ -290,6 +298,8 @@ class Scout:
 
     def _read(self, arg: str) -> str:
         url, hit = self._resolve(arg)
+        if (routed := self._fdic_api(url)) is not None:
+            return routed + "\n      (read the FDIC BankFind record above for quotes)"
         if not url.startswith("http"):
             return f"can't read {arg!r}: give a URL or a result ref"
         if url in self.read_urls:
