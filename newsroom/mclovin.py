@@ -25,6 +25,9 @@ Reply with JSON only:
   "hypotheses": [
     {
       "hypothesis": "one sentence that could be true or false",
+      "shape": "contradiction | computed_number | promise_vs_actual | status_vs_practice | connection",
+      "the_new_fact": "the specific record comparison or number that would be new if the hypothesis holds: record A
+                       says X, record B says Y; or the figure nobody has computed, and from which data",
       "why_now": "what in these signals surfaced it",
       "who_would_know": ["offices, companies or people who hold the answer"],
       "would_settle_it": ["specific record types or systems, with date ranges where you can"],
@@ -35,6 +38,12 @@ Reply with JSON only:
   "watching": [{"signal_ids": ["<id>"], "why_not_yet": "what is missing"}]
 }
 Do not count sources yourself; the newsroom counts distinct origins from the signal ids.
+
+Rank the hypotheses best first. The newsroom's published stories so far each had one of these shapes: a
+bank's own filings against the capital its consent order required (contradiction); a city's write-offs and
+its still-growing unpaid balance, from its auditor's tables (computed_number); a company's four filings
+showing one deadline pushed back week by week (promise_vs_actual). A hypothesis without a shape and a
+specific new fact is a topic, not a story: put it on the watch list.
 """
 
 GENERIC = {"public records", "records", "documents", "data", "news reports", "online sources", "government records"}
@@ -71,6 +80,8 @@ def finish(reply: dict, signals: list[Signal]) -> list[dict]:
             "who_would_know": [str(x) for x in h.get("who_would_know", []) if str(x).strip()],
             "would_settle_it": [str(x) for x in h.get("would_settle_it", []) if str(x).strip()],
             "accountable_party": str(h.get("accountable_party", "")).strip(),
+            "shape": str(h.get("shape", "")).strip(),
+            "the_new_fact": str(h.get("the_new_fact", "")).strip(),
             "evidence_so_far": {"signal_ids": ids, "distinct_origins": len(origins),
                                 "sources": sum(len(by_id[i].sources) for i in ids)},
         }
@@ -94,6 +105,8 @@ def hard_checks(h: dict, unknown: list[str] = ()) -> list[str]:
         problems.append("would_settle_it is generic; name the record types or systems")
     if h.get("hypothesis", "").count(". ") > 1:
         problems.append("hypothesis is more than one sentence")
+    if "the_new_fact" in h and not h["the_new_fact"]:
+        problems.append("missing the_new_fact: name the record comparison or the number that would be new")
     if not h.get("evidence_so_far", {}).get("signal_ids"):
         problems.append("cites no known signals")
     if unknown:

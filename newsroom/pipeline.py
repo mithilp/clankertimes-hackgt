@@ -83,6 +83,7 @@ def from_mclovin(doc: dict) -> dict | None:
         "would_settle_it": _list(_first(doc, ALIASES["would_settle_it"])),
         "evidence_so_far": {"signal_ids": _list(evidence.get("signal_ids") or _first(doc, ALIASES["signal_ids"])),
                             "distinct_origins": evidence.get("distinct_origins") or doc.get("distinct_origins")},
+        "shape": str(doc.get("shape") or ""), "the_new_fact": str(doc.get("the_new_fact") or ""),
         "mclovin": {"collection_id": raw_id, "created": doc.get("created_at") or doc.get("created") or doc.get("first_seen")},
     }
 

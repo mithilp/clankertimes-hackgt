@@ -340,6 +340,8 @@ def brief(h: dict) -> str:
     lines = [f"Hypothesis (from McLovin): {h['hypothesis']}"]
     if h["why_now"]:
         lines.append(f"Why now: {h['why_now']}")
+    if h.get("the_new_fact"):
+        lines.append(f"What would be new if it holds ({h.get('shape') or 'finding'}): {h['the_new_fact']}")
     if h["accountable_party"]:
         lines.append(f"Accountable party: {h['accountable_party']}")
     if h["who_would_know"]:
