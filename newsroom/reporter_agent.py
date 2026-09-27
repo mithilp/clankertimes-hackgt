@@ -476,6 +476,10 @@ sections, report codes, file names and internal labels unless the reader needs t
 ("a research agent", "another research agent"); never "scout 3" or "H2". Make the steps read as a sequence:
 "A research agent confirmed...", "Another research agent then found...". A hunch step starts "An agent had a
 hunch that".
+Keep the records' own terms for legal actions ("consent order", "civil money penalty", "lawsuit"), with a few
+plain words of explanation if needed; never swap in a milder or different word ("warning" is not a consent
+order). Say only what each research agent confirmed: leave out what it couldn't find or verify. If a research
+agent's step is mostly about what it couldn't find, return "" as its text and it will be left out.
 
 Reply with JSON only: {"steps": [{"i": 0, "text": "..."}]}
 """
@@ -1254,10 +1258,12 @@ class Investigation:
                 reply = llm.ask_json(NARRATE, listing, model=config.load().fast_model, max_tokens=3000)
                 for item in reply.get("steps", []) if isinstance(reply.get("steps"), list) else []:
                     i, text = item.get("i"), str(item.get("text") or "").strip()
-                    if isinstance(i, int) and 0 <= i < len(steps) and text:
-                        steps[i]["text"] = text
+                    if isinstance(i, int) and 0 <= i < len(steps) and "text" in item:
+                        if text or steps[i]["who"] == "Research agent":     # only a research step may be dropped
+                            steps[i]["text"] = text
             except Exception as e:  # noqa: BLE001 - the plain version is still correct, just wordier
                 self.say(f"  timeline narration failed ({type(e).__name__}); keeping the plain steps")
+        steps = [s for s in steps if s["text"] or s["who"] in ("Council", "Published")]
         for s in steps:
             s["text"] = whole_sentences(s["text"], 360)
         return steps
