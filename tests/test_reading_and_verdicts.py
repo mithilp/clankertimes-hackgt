@@ -87,3 +87,14 @@ def test_after_two_not_new_rounds_research_is_still_allowed(env, monkeypatch):  
                 "research": [{"statement": "The ACFR lists the receivable by year.", "records": ["Atlanta ACFR FY2022-2026"]}]}))
     fake_scouts(monkeypatch)
     assert run()["final"]["status"] != "spiked"
+
+
+def test_a_scout_can_cite_a_line_it_found_and_only_if_it_is_really_there(conn, monkeypatch):
+    ptr = "Name: Hon. Victoria Spartz\nSP Simon Property Group, Inc. Common\nP 02/03/2025 02/07/2025 $15,001 -\nDigitally Signed: Hon. Victoria Spartz , 02/10/2025"
+    monkeypatch.setattr(web, "fetch_text", lambda url: ptr)
+    s = scout_agent.Scout({"id": "H3", "statement": "Spartz filed late", "assignment": {}}, budget=5)
+    gov = "https://disclosures-clerk.house.gov/public_disc/ptr-pdfs/2025/20026754.pdf"
+    assert s.call("cite", f"{gov} :: P 02/03/2025 02/07/2025 :: contradicts :: 7 days").startswith("cited as contradicts (government_record)")
+    assert s.call("cite", f"{gov} :: P 02/03/2025 04/30/2025 :: supports :: made up").startswith("not cited")
+    assert s.call("cite", "https://someblog.example/x :: Digitally Signed: Hon. Victoria Spartz :: supports").endswith('Spartz"')
+    assert [f["source_type"] for f in s.findings] == ["government_record", "other"]     # a blog never becomes a record

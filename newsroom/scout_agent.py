@@ -59,6 +59,9 @@ TOOLS = {
              "(build its URL yourself), without a search engine. Then read the page you need"),
     "web_search": ("query", "general web search: short queries work best, site:agency.gov helps. Scarce and partly paid: "
                    "when you know which site holds the record, open it instead"),
+    "cite": ("URL or ref :: exact text :: supports|contradicts|unclear :: why", "record a line you found (with find or "
+             "open) as evidence, without reading the whole page again: the text must appear word for word in that document. "
+             "Separate the parts with ::, since index rows contain |. Use it for index rows, table lines and dates"),
     "find": ("URL or result ref | words", "search INSIDE one long document (a bulk index or ZIP, a big PDF, a data table) for "
              "the lines containing all the words, e.g. https://.../2025FD.zip | Castor. Returns those lines, with their "
              "column labels. Use it on anything long before reading, to learn IDs, dates and which part to read"),
@@ -189,6 +192,8 @@ class Scout:
             return self._read(arg)
         if tool == "find":
             return self._find(arg)
+        if tool == "cite":
+            return self._cite(arg)
         if tool == "open":
             return self._open(arg)
         if tool == "fdic_bank":
@@ -318,9 +323,45 @@ class Scout:
         self._hit(url, f"[searched inside] {web.host(url)}")
         if not lines:
             return f"no line in {len(text):,} characters contains all of: {' '.join(terms)}"
-        shown = "\n      ".join(line[:300] for line in lines[:MAX_FIND_LINES])
+        shown = "\n      ".join(self._with_link(line)[:360] for line in lines[:MAX_FIND_LINES])
         more = f" (showing {MAX_FIND_LINES})" if len(lines) > MAX_FIND_LINES else ""
         return f"{len(lines)} matching line(s) in {len(text):,} characters{more}:\n      {shown}"
+
+    def _cite(self, arg: str) -> str:
+        """Evidence from a line the scout already saw. Code checks it word for word against the document; the
+        source type is the record's own (official lookups) or, for a government or court site, fixed by host."""
+        parts = [p.strip() for p in arg.split("::")]
+        if len(parts) < 3:
+            return "cite needs: URL or ref :: exact text :: supports|contradicts|unclear :: why"
+        target, quote, finding = parts[0], parts[1].strip('"'), parts[2].lower()
+        why = parts[3] if len(parts) > 3 else ""
+        url, hit = self._resolve(target)
+        if finding not in ("supports", "contradicts", "unclear"):
+            return f"the finding must be supports, contradicts or unclear, not {parts[2]!r}"
+        text = web.fetch_text(url) if url.startswith("http") else ""
+        if not text:
+            return "couldn't fetch the document to check the text against"
+        if not contains_quote(text, quote):
+            return "not cited: that text doesn't appear word for word in the document. Copy it exactly from find's output"
+        source_type = self.known_type.get(url) or _official_type(url)
+        title = ((hit or {}).get("title") or web.host(url)).removeprefix("[official record] ").removeprefix("[searched inside] ")
+        self.findings.append({"url": url, "title": title, "source_type": source_type, "quote": quote,
+                              "finding": finding, "note": why})
+        return f"cited as {finding} ({source_type}): \"{quote[:160]}\""
+
+    def _with_link(self, line: str) -> str:
+        """A row of the House Clerk's disclosure index, with the filing's own PDF as a result to read. The Clerk
+        answers 403 for a guessed path that doesn't exist, so scouts guessing the link fail as if blocked."""
+        doc = re.search(r"DocID: (\d+)", line)
+        year = re.search(r"Year: (\d{4})", line)
+        kind = re.search(r"FilingType: (\w)", line)
+        if not (doc and year and "StateDst:" in line):
+            return line
+        folder = "ptr-pdfs" if kind and kind.group(1) == "P" else "financial-pdfs"
+        url = f"https://disclosures-clerk.house.gov/public_disc/{folder}/{year.group(1)}/{doc.group(1)}.pdf"
+        ref = self._hit(url, f"[official record] House disclosure {doc.group(1)} ({'trade report' if folder == 'ptr-pdfs' else 'filing'})",
+                        line[:160], "government_record")
+        return f"{line} -> {ref} {url}"
 
     def _read(self, arg: str) -> str:
         target, _, focus = arg.partition("|")
@@ -466,6 +507,17 @@ class Scout:
         if held != verdict:
             report["held_back"] = f"the scout said {verdict!r}, but no verified quote from a source that counts says so"
         return {"findings": self.findings, "trail": self.trail, "used": self.used, "report": report}
+
+
+def _official_type(url: str) -> str:
+    """A cited line's source type from where it lives: government and court sites are records; anything else is
+    "other", which never counts as proof, so a cited line can't upgrade a blog into evidence."""
+    host = web.host(url)
+    if host.endswith((".uscourts.gov", "supremecourt.gov")) or host == "courtlistener.com":
+        return "court_record"
+    if host.endswith((".gov", ".mil")) or host in ("gov", "mil"):
+        return "government_record"
+    return "other"
 
 
 def focused(text: str, focus: str, limit: int = MAX_PAGE_CHARS) -> str:
