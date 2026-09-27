@@ -74,7 +74,13 @@ def ask_json(system: str, user: str, *, model: str, max_tokens: int = 4000, thin
             ) from None
         _record_usage(model, envelope)
         if envelope.get("is_error") or proc.returncode != 0:
-            raise ClaudeCodeError(f"claude failed: {str(envelope.get('result'))[:300]}")
+            message = str(envelope.get("result"))
+            smart = settings.smart_model
+            # The fast model sometimes declines a page it misreads as unsafe (a court filing, a crime log). The
+            # stronger model reads those fine: one retry there before giving up on the page.
+            if "can't help with this" in message and model != smart:
+                return ask_json(system, user, model=smart, max_tokens=max_tokens, thinking=thinking)
+            raise ClaudeCodeError(f"claude failed: {message[:300]}")
 
         result = envelope.get("result")
         if isinstance(result, dict):
