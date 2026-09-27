@@ -48,12 +48,31 @@ def search(query: str, count: int = 10) -> list[dict]:
     try:
         return browser.search(query, count)
     except browser.BrowserError as e:
-        if settings.search_fallback != "brave" or not settings.brave_api_key:
+        problems = [str(e)]
+        if settings.search_fallback == "none":
             raise SearchUnavailable(str(e)) from e
-        try:
-            return _brave(query, count)
-        except httpx.HTTPError as b:
-            raise SearchUnavailable(f"{e}; brave: {type(b).__name__}: {b}"[:300]) from b
+        # Metered fallbacks, in order: Firecrawl, then Brave. Each is skipped when unset or out of credit.
+        for name, key, run in (("firecrawl", settings.firecrawl_api_key, _firecrawl),
+                               ("brave", settings.brave_api_key, _brave)):
+            if not key:
+                continue
+            try:
+                return run(query, count)
+            except httpx.HTTPError as err:
+                problems.append(f"{name}: {type(err).__name__}: {str(err)[:120]}")
+        raise SearchUnavailable("; ".join(problems)[:400]) from e
+
+
+def _firecrawl(query: str, count: int) -> list[dict]:
+    from . import throttle
+    with throttle.pace("firecrawl", 0.5):
+        response = httpx.post("https://api.firecrawl.dev/v2/search", timeout=45,
+                              headers={"Authorization": f"Bearer {config.load().firecrawl_api_key}"},
+                              json={"query": query, "limit": min(count, 10)})
+    throttle.tally("firecrawl")
+    response.raise_for_status()
+    return [{"title": r.get("title", ""), "url": r["url"], "description": r.get("description", ""), "engine": "firecrawl"}
+            for r in (response.json().get("data") or {}).get("web", []) if r.get("url")]
 
 
 def _brave(query: str, count: int) -> list[dict]:

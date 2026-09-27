@@ -22,6 +22,7 @@ class Settings:
     fast_model: str          # bulk work: reading complaints, grouping claims, scouts reading pages
     smart_model: str         # the reporter's judgment and writing
     brave_api_key: str | None
+    firecrawl_api_key: str | None  # search fallback when the browser engines are paused (metered: ~2 credits a search)
     openfda_api_key: str | None
     courtlistener_token: str | None  # optional: CourtListener search works without one, at a lower rate limit
     db_path: Path
@@ -55,6 +56,7 @@ def load() -> Settings:
         fast_model=fast_model,
         smart_model=smart_model,
         brave_api_key=env("BRAVE_API_KEY") or None,
+        firecrawl_api_key=env("FIRECRAWL_API_KEY") or None,
         openfda_api_key=env("OPENFDA_API_KEY") or None,
         courtlistener_token=env("COURTLISTENER_TOKEN") or None,
         db_path=Path(env("NEWSROOM_DB", "data/newsroom.db")),
