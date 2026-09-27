@@ -183,7 +183,10 @@ class Scout:
         if tool == "open":
             return self._open(arg)
         if tool == "fdic_bank":
-            return self._listing(self._official(records.fdic_bank(arg)), "FDIC bank records")
+            # One bank's record is short and always worth reading: read it now rather than leave it in the list.
+            refs = self._official(records.fdic_bank(arg))
+            return self._listing(refs, "FDIC bank records") + "".join(
+                f"\n      read {r}: {self._read(r)}" for r in refs[:1])
         if tool == "sec_filings":
             phrase, forms, since = _pipe(arg, 3)
             refs = [self._hit(r["url"], f"[SEC {r['form']} filed {r['date']}] {r['filer'][:100]}", "")
