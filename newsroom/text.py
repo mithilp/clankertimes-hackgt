@@ -18,6 +18,16 @@ def words(text: str) -> list[str]:
 
 
 def contains_quote(source: str, quote: str) -> bool:
-    """True if quote appears word for word in source, ignoring case, spacing and curly punctuation."""
-    q = squash(quote).strip(" .,;:'\"")
-    return len(q) >= 10 and q in squash(source)
+    """True if quote appears word for word in source, ignoring case, spacing and curly punctuation. A quote
+    shortened with an ellipsis ("..." or "…") matches when each piece appears word for word, in order."""
+    pieces = [squash(p).strip(" .,;:'\"") for p in re.split(r"\.\.\.|…", quote)]
+    pieces = [p for p in pieces if p]
+    if not pieces or sum(map(len, pieces)) < 10:
+        return False
+    text, at = squash(source), 0
+    for piece in pieces:
+        at = text.find(piece, at)
+        if at < 0:
+            return False
+        at += len(piece)
+    return True

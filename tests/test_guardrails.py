@@ -111,3 +111,11 @@ def test_short_scare_quotes_are_not_checked_but_real_quotes_are():
     from newsroom.article import QUOTED
     assert QUOTED.findall('the "other" programs') == []
     assert QUOTED.findall('it said "82 students are enrolled" there') == ["82 students are enrolled"]
+
+
+def test_a_quote_shortened_with_an_ellipsis_matches_its_pieces_in_order():
+    from newsroom.text import contains_quote
+    src = "The Bank shall achieve, by no later than December 31, 2024, and thereafter maintain a Leverage Ratio equal to or greater than 9 percent."
+    assert contains_quote(src, "achieve, by no later than December 31, 2024, and thereafter maintain a Leverage Ratio ... equal to or greater than 9 percent")
+    assert not contains_quote(src, "equal to or greater than 9 percent ... achieve, by no later than December 31")
+    assert not contains_quote(src, "achieve, by no later than December 31, 2025 ... 9 percent")
