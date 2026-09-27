@@ -57,6 +57,7 @@ Web search is scarce. When the record lives on one of these systems, `open` the 
 - **Georgia Public Service Commission:** a docket is `https://psc.ga.gov/search/facts-docket/?docketId=NNNNN` (lists its documents); a document is `https://psc.ga.gov/search/facts-document/?documentId=NNNNN`, and opening it lists the files as `.../DownloadFile/<documentId>/<fileId>` links. A URL with only one number after DownloadFile is wrong: open the document page instead.
 - **SEC EDGAR:** use `sec_filings` for full-text search. Filing documents open directly under `https://www.sec.gov/Archives/edgar/data/...`.
 - **Municipal bonds:** `https://emma.msrb.org/IssuerHomePage/State?state=GA` (issuers by state), then the issuer's official statements and continuing disclosures.
+- **Banks:** use `fdic_bank` for any bank's quarterly capital, assets, bad loans and income from its Call Reports.
 - **Bank regulators:** FDIC orders `https://orders.fdic.gov/s/`; Federal Reserve actions `https://www.federalreserve.gov/supervisionreg/enforcementactions.htm`; OCC actions `https://www.occ.gov/topics/laws-and-regulations/enforcement-actions/index-enforcement-actions.html`; CFPB actions `https://www.consumerfinance.gov/enforcement/actions/`.
 - **Nonprofits (IRS 990s):** `https://projects.propublica.org/nonprofits/search?q=NAME`.
 - **Congress financial disclosures:** `https://disclosures-clerk.house.gov/FinancialDisclosure`.
