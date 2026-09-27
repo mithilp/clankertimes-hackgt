@@ -50,6 +50,12 @@ def render(draft: dict) -> str:
     return f"HEADLINE: {a['headline']}\n\nSENTENCES:\n{body}\n\nSOURCES:\n\n{listing}"
 
 
+KEPT = """
+
+THIS IS A REVISION, AND YOU APPROVED THE PREVIOUS DRAFT. Approve again unless the revision introduced a
+problem that should stop publication (a new unsupported claim, a new misleading frame). Don't reopen points
+you already accepted, and don't raise new polish: put that in "notes"."""
+
 REVISION = """
 
 THIS IS A REVISION. Your problems with the previous draft were:
@@ -62,7 +68,9 @@ caveat a reader needs. Wording and polish you would still change go in "notes" w
 
 def judge(name: str, draft: dict, *, web_search: bool = True, earlier: dict | None = None) -> dict:
     extra = ""
-    if earlier:
+    if earlier and earlier.get("verdict") == "approve":
+        extra += KEPT
+    elif earlier:
         listed = "\n".join(f"- \"{p.get('sentence', '')}\": {p.get('issue', '')}" for p in earlier.get("problems", [])) or "(none)"
         extra += REVISION.format(earlier=listed)
     if name == "novelty" and web_search:
@@ -86,7 +94,7 @@ def review(draft: dict, judges=JUDGES, *, web_search: bool = True, previous: dic
     mechanical = article.check(draft["article"], draft["sources"])
     if mechanical:
         return {"verdict": "revise", "stage": "mechanical", "mechanical": mechanical, "judges": []}
-    before = {j["judge"]: j for j in (previous or {}).get("judges", []) if j.get("verdict") != "approve"}
+    before = {j["judge"]: j for j in (previous or {}).get("judges", [])}
     results = [judge(j, draft, web_search=web_search, earlier=before.get(j)) for j in judges]
     verdict = "approve" if all(r["verdict"] == "approve" for r in results) else "revise"
     return {"verdict": verdict, "stage": "council", "mechanical": [], "judges": results}

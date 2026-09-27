@@ -654,7 +654,8 @@ def test_on_a_revision_each_judge_sees_its_own_earlier_problems(env, monkeypatch
     first, second = [u for s, u in model.calls if s == "skeptic"]
     assert "THIS IS A REVISION" not in first
     assert "THIS IS A REVISION" in second and "buried lead" in second
-    assert "THIS IS A REVISION" not in [u for s, u in model.calls if s == "virality"][-1]   # it approved round 1
+    # Virality approved round 1: it is asked to keep approving unless the revision broke something.
+    assert "YOU APPROVED THE PREVIOUS DRAFT" in [u for s, u in model.calls if s == "virality"][-1]
 
 
 def test_the_reporters_plan_sends_scouts_before_the_rewrite(env, monkeypatch):

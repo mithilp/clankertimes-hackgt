@@ -1128,6 +1128,10 @@ class Investigation:
     def revise(self, decision: dict, d: dict, sources: dict, result: dict, plan: dict | None = None,
                researched: bool = False) -> dict | None:
         notes = self._council_notes(result)
+        approved = [j["judge"] for j in result["judges"] if j["verdict"] == "approve"]
+        if approved:
+            notes += (f"\n\nALREADY APPROVED BY: {', '.join(approved)}. Keep what they approved: change only what the "
+                      "other judges need, and don't rewrite parts nobody objected to.")
         if plan and (plan.get("why") or plan.get("fixes")):
             notes += (f"\n\nYOUR OWN PLAN FOR THIS REVISION: {plan.get('why', '')}"
                       + "".join(f"\n- {f}" for f in plan.get("fixes", [])))
