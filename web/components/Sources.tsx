@@ -2,29 +2,36 @@
 
 import { useEffect, useRef, useState } from "react";
 import { flushSync } from "react-dom";
-import { SOURCE_GROUPS, type SourceGroup, type SourceItem } from "@/lib/sources";
+import { SOURCE_GROUPS, type Site, type SourceGroup } from "@/lib/sources";
 import { smart } from "@/lib/text";
 
-const SHOWN = 8;   // sources listed before "Show all"
+const SHOWN = 8;   // websites listed before "Show all"
 
-// Open one source and bring it into view: its row is always in the page, maybe folded away under "Show all".
-function open(row: HTMLElement, more: HTMLDetailsElement | null) {
-  if (more?.contains(row)) more.open = true;
-  row.querySelector("details")?.setAttribute("open", "");
-  row.scrollIntoView({ block: "center" });
+// Open the website a passage is from and bring the passage into view. Every row is always in the page,
+// maybe folded away under "Show all".
+function open(passage: HTMLElement, more: HTMLDetailsElement | null) {
+  const row = passage.closest(".src");
+  if (more?.contains(passage)) more.open = true;
+  row?.querySelector("details")?.setAttribute("open", "");
+  (passage.offsetHeight || !row ? passage : row).scrollIntoView({ block: "center" });   // a passage with no quote shows nothing
 }
 
-// The sources a story cites: a bar of what kind of evidence it rests on, a legend that filters the list by
-// kind, and one line per source that opens to the quoted passage. The list is the bar's table view: every
-// number the bar shows is also written out.
-export default function Sources({ items }: { items: SourceItem[] }) {
+const counted = (site: Site) =>
+  site.pages.length > 1
+    ? `${site.pages.length} pages, ${site.passages} passages`
+    : `${site.passages} passage${site.passages === 1 ? "" : "s"}`;
+
+// The sources a story cites, one per website: a bar of what kind of evidence it rests on, a legend that
+// filters the list by kind, and one line per website that opens to the pages and passages quoted from it.
+// The list is the bar's table view: every number the bar shows is also written out.
+export default function Sources({ sites }: { sites: Site[] }) {
   const [only, setOnly] = useState<SourceGroup | null>(null);   // the kind the reader filtered to
   const [hover, setHover] = useState<SourceGroup | null>(null);
   const more = useRef<HTMLDetailsElement>(null);
   const moreWasOpen = useRef(false);
 
-  const total = items.length;
-  const groups = SOURCE_GROUPS.map((g) => ({ ...g, count: items.filter((s) => s.group === g.key).length })).filter((g) => g.count);
+  const total = sites.length;
+  const groups = SOURCE_GROUPS.map((g) => ({ ...g, count: sites.filter((s) => s.group === g.key).length })).filter((g) => g.count);
   const focus = hover ?? only;
   const read = groups.find((g) => g.key === focus);
 
@@ -40,14 +47,14 @@ export default function Sources({ items }: { items: SourceItem[] }) {
     setOnly(next);
   }
 
-  // A footnote's "Source N below" link, or a shared #source-… URL, opens that source even when it is folded
-  // away or filtered out.
+  // A footnote's "Source N below" link, or a shared #source-… URL, opens that passage's website even when it is
+  // folded away or filtered out.
   useEffect(() => {
     const reveal = (id: string) => {
-      const row = document.getElementById(id);
-      if (!row?.classList.contains("src")) return;
+      const passage = document.getElementById(id);
+      if (!passage?.closest(".src")) return;
       flushSync(() => setOnly(null));
-      open(row, more.current);
+      open(passage, more.current);
     };
     const fromHash = () => {
       const id = decodeURIComponent(window.location.hash.slice(1));
@@ -59,8 +66,8 @@ export default function Sources({ items }: { items: SourceItem[] }) {
     };
     // A page opened at #source-…: nothing is filtered yet, so just unfold it.
     const first = decodeURIComponent(window.location.hash.slice(1));
-    const row = first.startsWith("source-") ? document.getElementById(first) : null;
-    if (row) open(row, more.current);
+    const passage = first.startsWith("source-") ? document.getElementById(first) : null;
+    if (passage?.closest(".src")) open(passage, more.current);
     window.addEventListener("hashchange", fromHash);
     document.addEventListener("click", fromClick);
     return () => {
@@ -70,35 +77,35 @@ export default function Sources({ items }: { items: SourceItem[] }) {
   }, []);
 
   const share = (count: number) => `${Math.round((count / total) * 100)}%`;
-  const noun = (g: (typeof groups)[number]) =>
-    g.key === "other" ? (g.count === 1 ? "other source" : "other sources") : (g.count === 1 ? g.one : g.label).toLowerCase();
-  const row = (s: SourceItem) => {
-    const group = SOURCE_GROUPS.find((g) => g.key === s.group)!;
+  const row = (site: Site) => {
+    const group = SOURCE_GROUPS.find((g) => g.key === site.group)!;
     return (
-      <li key={s.id} id={`source-${s.id}`} className={`src g-${s.group}`} hidden={only !== null && s.group !== only}>
+      <li key={site.n} className={`src g-${site.group}`} hidden={only !== null && site.group !== only}>
         <details>
           <summary>
-            <span className="n">{s.n}</span>
+            <span className="n">{site.n}</span>
             <span>
-              <span className="t">{s.title}</span>
-              {s.quote && <span className="q">{smart(s.quote)}</span>}
+              <span className="t">{site.name}</span>
+              <span className="pg">{site.pages[0].title}</span>
               <span className="m">
                 <span className="sw" aria-hidden="true" />
                 <span>{group.one}</span>
                 <span aria-hidden="true">·</span>
-                <span>{s.host}</span>
+                <span>{counted(site)}</span>
               </span>
             </span>
             <span className="chev" aria-hidden="true" />
           </summary>
           <div className="d">
-            {s.quote && <q>{smart(s.quote)}</q>}
-            <p>
-              <a href={s.url} target="_blank" rel="noopener noreferrer">Open the record</a>
-              {s.accessed && <> · retrieved {s.accessed}</>}
-              <br />
-              {s.url}
-            </p>
+            {site.pages.map((page) => (
+              <div key={page.url || page.title} className="page">
+                <a className="pt" href={page.url} target="_blank" rel="noopener noreferrer">{page.title}</a>
+                {page.passages.map((p) => (
+                  <p key={p.id} id={`source-${p.id}`} className="psg">{p.quote && <q>{smart(p.quote)}</q>}</p>
+                ))}
+                <p className="u">{page.url}{page.accessed && <> · retrieved {page.accessed}</>}</p>
+              </div>
+            ))}
           </div>
         </details>
       </li>
@@ -111,10 +118,10 @@ export default function Sources({ items }: { items: SourceItem[] }) {
 
       <p className="mix-read" aria-live="polite">
         {groups.length === 1
-          ? <><strong>{total}</strong> sources cited, all {noun(groups[0])}</>
+          ? <><strong>{total}</strong> {total === 1 ? "source" : "sources"} cited, all {groups[0].label.toLowerCase()} · each website counts once</>
           : read
-            ? <><strong>{read.count}</strong> {noun(read)} · {share(read.count)} of the {total} sources</>
-            : <><strong>{total}</strong> sources cited, by kind</>}
+            ? <>{read.label}: <strong>{read.count}</strong> of {total} sources ({share(read.count)})</>
+            : <><strong>{total}</strong> sources cited · each website counts once</>}
       </p>
       {groups.length > 1 && (
         <div className="mix" aria-hidden="true">
@@ -155,14 +162,14 @@ export default function Sources({ items }: { items: SourceItem[] }) {
       )}
 
       <div>
-        <ol className="srcs">{items.slice(0, SHOWN).map(row)}</ol>
+        <ol className="srcs">{sites.slice(0, SHOWN).map(row)}</ol>
         {total > SHOWN && (
           <details className="more-srcs" ref={more}>
             <summary>
               <span className="closed">Show all {total} sources</span>
               <span className="opened">Show fewer sources</span>
             </summary>
-            <ol className="srcs">{items.slice(SHOWN).map(row)}</ol>
+            <ol className="srcs">{sites.slice(SHOWN).map(row)}</ol>
           </details>
         )}
       </div>

@@ -115,15 +115,6 @@ export async function getArticle(slug: string): Promise<Article | null> {
   return samples.find((a) => a.slug === slug) ?? null;
 }
 
-// Numbered in order of first citation, the way a reader meets them.
-export function sourceOrder(article: Article): string[] {
-  const seen: string[] = [];
-  for (const paragraph of article.paragraphs)
-    for (const sentence of paragraph)
-      for (const id of sentence.cite) if (!seen.includes(id) && article.sources[id]) seen.push(id);
-  return seen;
-}
-
 export function formatDate(iso: string, withTime = false): string {
   const d = new Date(iso);
   // A bare date ("2026-09-25") is a calendar day, not midnight UTC; don't shift it into the day before.

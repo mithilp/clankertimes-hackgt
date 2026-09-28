@@ -1,13 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import Cite from "@/components/Cite";
+import Cite, { type CitedPassage } from "@/components/Cite";
 import Sample from "@/components/Sample";
 import Share from "@/components/Share";
 import Sources from "@/components/Sources";
 import Timeline from "@/components/Timeline";
 import { AUTHOR, OG_BASE, SITE_NAME, absolute } from "@/lib/site";
-import { BEAT_NAMES, SECTIONS, formatDate, getArticle, readingMinutes, sourceOrder } from "@/lib/articles";
-import { host, sourceGroup, type SourceItem } from "@/lib/sources";
+import { BEAT_NAMES, SECTIONS, formatDate, getArticle, readingMinutes } from "@/lib/articles";
+import { SOURCE_GROUPS, citedSites, type Site } from "@/lib/sources";
 import { smart } from "@/lib/text";
 
 export const revalidate = 60;
@@ -39,15 +39,23 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
   const article = await getArticle(slug);
   if (!article) notFound();
 
-  const order = sourceOrder(article);
-  const number = (id: string) => order.indexOf(id) + 1;
-  const sources: SourceItem[] = order.map((id, i) => {
-    const s = article.sources[id];
-    return {
-      id, n: i + 1, title: s.title.replace(/^\[(?:PDF|DOC|DOCX|XLS|XLSX)\]\s*/i, ""), group: sourceGroup(s.kind), host: host(s.url), url: s.url,
-      quote: s.quote ?? "", accessed: s.accessed ? formatDate(s.accessed) : "",
-    };
-  });
+  // One website is one source: footnotes are numbered by website, and a sentence citing several passages from
+  // one website gets one footnote that shows them all.
+  const { sites, siteOf } = citedSites(article, formatDate);
+  const footnotes = (cite: string[]) => {
+    const out: { site: Site; passages: CitedPassage[] }[] = [];
+    for (const id of cite) {
+      const site = sites[siteOf[id]];
+      if (!site) continue;
+      const page = site.pages.find((pg) => pg.passages.some((p) => p.id === id))!;
+      const passage = { id, title: page.title, url: page.url, quote: article.sources[id].quote ?? "" };
+      const note = out.find((o) => o.site === site);
+      if (note) note.passages.push(passage);
+      else out.push({ site, passages: [passage] });
+    }
+    return out;
+  };
+  const kindOf = (site: Site) => SOURCE_GROUPS.find((g) => g.key === site.group)!.one;
   const section = article.beats.find((b) => b in SECTIONS);
   const url = absolute(`/article/${article.slug}`);
   const jsonLd = {
@@ -63,7 +71,7 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
     mainEntityOfPage: url,
     articleSection: BEAT_NAMES[article.beats[0]],
     isAccessibleForFree: true,
-    citation: order.map((id) => article.sources[id].url),
+    citation: [...new Set(sites.flatMap((site) => site.pages.map((page) => page.url)).filter(Boolean))],
   };
 
   return (
@@ -81,7 +89,7 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
           <div className="byline">
             <span className="who">By the Clanker Times newsroom, a team of AI agents</span>
             <span className="meta">
-              {formatDate(article.published_at, true)} · {readingMinutes(article)} min read · {order.length} sources
+              {formatDate(article.published_at, true)} · {readingMinutes(article)} min read · {sites.length} sources
               {article.corrections?.length ? ` · Corrected` : ""}
             </span>
           </div>
@@ -102,10 +110,10 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
               {paragraph.map((sentence, s) => (
                 <span key={s} className="sentence">
                   {smart(sentence.text)}
-                  {sentence.cite.filter((id) => article.sources[id]).map((id, i) => (
-                    <span key={id}>
+                  {footnotes(sentence.cite).map(({ site, passages }, i) => (
+                    <span key={site.n}>
                       {i > 0 && <span className="cite-sep">,</span>}
-                      <Cite n={number(id)} id={id} source={article.sources[id]} />
+                      <Cite n={site.n} site={site.name} kind={kindOf(site)} passages={passages} />
                     </span>
                   ))}
                   {s < paragraph.length - 1 ? " " : ""}
@@ -118,8 +126,8 @@ export default async function ArticlePage({ params }: PageProps<"/article/[slug]
 
       <div className="notes">
         <Share url={url} title={article.headline} />
-        {article.timeline?.length ? <Timeline steps={article.timeline} sources={order.length} /> : null}
-        <Sources items={sources} />
+        {article.timeline?.length ? <Timeline steps={article.timeline} sources={sites.length} /> : null}
+        <Sources sites={sites} />
 
         <section aria-labelledby="corrections">
           <h2 id="corrections">Corrections</h2>

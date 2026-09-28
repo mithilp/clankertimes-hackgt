@@ -269,6 +269,10 @@ p { margin: 0; }
 .pop .src { font-weight: 600; }
 .pop q { font-family: var(--serif); font-size: 15px; font-style: italic; color: var(--ink-2); quotes: "“" "”"; }
 .pop a { color: var(--link); }
+/* every passage from this website the sentence rests on, each with the page it is on */
+.pop { max-height: min(60vh, 440px); overflow-y: auto; }
+.pop .psg { display: grid; gap: 3px; }
+.pop .psg + .psg { border-top: 1px solid var(--rule); padding-top: 8px; }
 
 .notes { max-width: var(--read); margin: 0 auto; padding-bottom: 40px; display: grid; gap: 34px; }
 .notes section { border-top: 1px solid var(--ink); padding-top: 14px; display: grid; gap: 14px; }
@@ -312,20 +316,22 @@ p { margin: 0; }
 .src summary:hover .t { text-decoration: underline; text-underline-offset: 3px; text-decoration-thickness: 1px; }
 .src .n { font-family: var(--sans); font-size: 12px; font-weight: 700; color: var(--link); padding-top: 3px; font-variant-numeric: tabular-nums; }
 .src .t { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; font-size: 16px; line-height: 1.4; font-weight: 600; }
-.src .q { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; font-size: 14.5px; line-height: 1.45; font-style: italic; color: var(--ink-2); }
-.src .q::before { content: "“"; }
-.src .q::after { content: "”"; }
-.src details[open] .q { display: none; }   /* the whole passage is open below */
+.src .pg { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 1px; font-size: 14.5px; line-height: 1.45; color: var(--ink-2); }
+.src details[open] .pg { display: none; }   /* every page is listed below */
 .src .m { display: flex; align-items: center; gap: 6px; margin-top: 2px; font-family: var(--sans); font-size: 12.5px; color: var(--muted); min-width: 0; }
 .src .m span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .src .sw { flex: none; width: 8px; height: 8px; border-radius: 2px; background: var(--c); }
 .src .chev { width: 7px; height: 7px; margin-top: 7px; border-right: 1.5px solid var(--muted); border-bottom: 1.5px solid var(--muted); transform: rotate(45deg); transition: transform 0.15s; }
 .src details[open] .chev { transform: rotate(-135deg); margin-top: 10px; }
-.src .d { display: grid; gap: 8px; padding: 0 2px 14px 38px; }
+/* opened: each page quoted from the website, its passages, and where it lives */
+.src .d { display: grid; gap: 16px; padding: 0 2px 16px 38px; }
+.src .page { display: grid; gap: 6px; }
+.src .pt { font-size: 15.5px; line-height: 1.4; font-weight: 600; color: var(--link); }
+.src .psg { border-left: 2px solid var(--rule); padding-left: 10px; scroll-margin-top: 80px; }
+.src .psg:empty { display: none; }
+.src .psg:target { background: var(--highlight); border-left-color: var(--c); }
 .src q { font-size: 16px; line-height: 1.5; font-style: italic; color: var(--ink-2); quotes: "“" "”"; }
-.src .d p { font-family: var(--sans); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
-.src .d a { color: var(--link); }
-.src:target { background: var(--highlight); }
+.src .u { font-family: var(--sans); font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
 
 .more-srcs > summary {
   list-style: none; cursor: pointer; padding: 12px 2px; border-bottom: 1px solid var(--rule);
